@@ -35,7 +35,7 @@ export default function ForgotPasswordPage() {
               <h2 className="text-lg font-semibold mb-1">{t("methodCliTitle")}</h2>
               <p className="text-sm text-text-muted mb-3">{t("methodCliDescription")}</p>
               <div className="bg-black/30 rounded-lg p-3 mb-3 font-mono text-sm text-green-400 border border-white/5">
-                <code>npx coolrouter reset-password</code>
+                <code>node bin/reset-password.mjs</code>
               </div>
               <p className="text-xs text-text-muted">{t("methodCliHint")}</p>
             </div>
@@ -65,10 +65,10 @@ export default function ForgotPasswordPage() {
                 </li>
                 <li>
                   {t("deleteSettingsFile")}{" "}
-                  <code className="bg-black/30 px-1 rounded text-text-main">
-                    data/settings.json
-                  </code>{" "}
-                  ({t("orRemovePasswordHashField")})
+                  <div className="bg-black/30 rounded-lg p-2 mt-1 font-mono text-xs text-green-400 border border-white/5 break-all">
+                    sqlite3 storage.sqlite &quot;DELETE FROM key_value WHERE
+                    namespace=&apos;settings&apos; AND key=&apos;password&apos;&quot;
+                  </div>
                 </li>
                 <li>{t("restartServerWithNewPassword")}</li>
               </ol>

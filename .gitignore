@@ -76,6 +76,9 @@ docs/*
 !docs/USER_GUIDE.md
 !docs/API_REFERENCE.md
 !docs/TROUBLESHOOTING.md
+!docs/INSTALL.md
+!docs/CONFIGURATION.md
+!docs/RELEASING.md
 !docs/EXECUTION_CONTEXT_PROVIDER_SYNC.md
 !docs/TASK_NEBIUS_BACKEND_ENABLEMENT.md
 !docs/frontend-backend-provider-gap-report.md

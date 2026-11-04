@@ -73,7 +73,6 @@ export async function PATCH(request) {
         }
       } else {
         // First-time password set (no DB hash yet).
-        const LEGACY_DEFAULT_PASSWORD = "123456";
         const initialPassword = process.env.INITIAL_PASSWORD;
         const currentPassword = body.currentPassword || "";
 
@@ -93,9 +92,9 @@ export async function PATCH(request) {
             return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
           }
         } else {
-          // Legacy compatibility: instances without INITIAL_PASSWORD may still use old default.
-          const allowedWithoutHash = ["", LEGACY_DEFAULT_PASSWORD];
-          if (!allowedWithoutHash.includes(currentPassword)) {
+          // No password anywhere yet (fresh install before onboarding): there is no
+          // "current" password, so none may be supplied. There is no built-in default.
+          if (currentPassword !== "") {
             return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
           }
         }
@@ -161,8 +160,7 @@ export async function PATCH(request) {
       const wasEnabled = (oldSettings as Record<string, unknown>).modelsDevSyncEnabled === true;
       const isEnabled = settings.modelsDevSyncEnabled === true;
       const oldInterval = (oldSettings as Record<string, unknown>).modelsDevSyncInterval as
-        | number
-        | undefined;
+        number | undefined;
       const newInterval = settings.modelsDevSyncInterval as number | undefined;
 
       if (wasEnabled && !isEnabled) {

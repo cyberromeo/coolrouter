@@ -29,6 +29,8 @@ ENV NODE_OPTIONS="--max-old-space-size=256"
 
 # Data directory inside Docker — must match the volume mount in docker-compose.yml
 ENV DATA_DIR=/app/data
+# Tells the update checker which upgrade instructions to show (docker pull …)
+ENV COOLROUTER_INSTALL_KIND=docker
 RUN apt-get update \
   && apt-get install -y --no-install-recommends libsecret-1-0 ca-certificates \
   && rm -rf /var/lib/apt/lists/*
@@ -48,6 +50,7 @@ COPY --from=builder /app/scripts/run-standalone.mjs ./run-standalone.mjs
 COPY --from=builder /app/scripts/runtime-env.mjs ./runtime-env.mjs
 COPY --from=builder /app/scripts/bootstrap-env.mjs ./bootstrap-env.mjs
 COPY --from=builder /app/scripts/healthcheck.mjs ./healthcheck.mjs
+COPY --from=builder /app/bin/reset-password.mjs ./reset-password.mjs
 
 EXPOSE 20128
 

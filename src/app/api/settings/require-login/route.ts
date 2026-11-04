@@ -18,7 +18,16 @@ export async function GET() {
     const requireLogin = settings.requireLogin !== false;
     const hasPassword = !!settings.password || !!process.env.INITIAL_PASSWORD;
     const setupComplete = !!settings.setupComplete;
-    return NextResponse.json({ requireLogin, hasPassword, setupComplete, ...nodeInfo });
+    // True while the instance still signs in with INITIAL_PASSWORD from the environment
+    // (no password saved in Settings yet) — the login page shows a hint only then.
+    const initialPasswordActive = !settings.password && !!process.env.INITIAL_PASSWORD;
+    return NextResponse.json({
+      requireLogin,
+      hasPassword,
+      setupComplete,
+      initialPasswordActive,
+      ...nodeInfo,
+    });
   } catch (error) {
     console.error("[API] Error fetching require-login settings:", error);
     return NextResponse.json(

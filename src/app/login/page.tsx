@@ -14,6 +14,7 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [hasPassword, setHasPassword] = useState(null);
   const [setupComplete, setSetupComplete] = useState(null);
+  const [initialPasswordActive, setInitialPasswordActive] = useState(false);
   const [mounted, setMounted] = useState(false);
   const [nodeVersion, setNodeVersion] = useState(null);
   const [nodeCompatible, setNodeCompatible] = useState(true);
@@ -43,6 +44,7 @@ export default function LoginPage() {
           }
           setHasPassword(!!data.hasPassword);
           setSetupComplete(!!data.setupComplete);
+          setInitialPasswordActive(data.initialPasswordActive === true);
         } else {
           setHasPassword(true);
           setSetupComplete(true);
@@ -254,7 +256,9 @@ export default function LoginPage() {
                     {error}
                   </p>
                 )}
-                <p className="text-xs text-text-muted/60 pt-0.5">{t("defaultPasswordHint")}</p>
+                {initialPasswordActive && (
+                  <p className="text-xs text-text-muted/60 pt-0.5">{t("defaultPasswordHint")}</p>
+                )}
               </div>
 
               <Button

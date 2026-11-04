@@ -12,6 +12,7 @@ import ComboDefaultsTab from "./components/ComboDefaultsTab";
 import ProxyTab from "./components/ProxyTab";
 import AppearanceTab from "./components/AppearanceTab";
 import ModelAliasesTab from "./components/ModelAliasesTab";
+import UpdatesCard from "./components/UpdatesCard";
 
 const tabs = [
   { id: "general", labelKey: "general", icon: "settings" },
@@ -67,6 +68,7 @@ export default function SettingsPage() {
         >
           {activeTab === "general" && (
             <div className="flex flex-col gap-6">
+              <UpdatesCard />
               <AppearanceTab />
               <SystemStorageTab />
             </div>

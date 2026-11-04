@@ -213,8 +213,14 @@ export function bootstrapEnv({ dataDirOverride, quiet = false } = {}) {
   }
 
   // ── Warn about default password ────────────────────────────────────────────
-  if (merged.INITIAL_PASSWORD === "CHANGEME" || !merged.INITIAL_PASSWORD?.trim()) {
-    log("⚠️  INITIAL_PASSWORD is not set — using default 'CHANGEME'. Change it in Settings!");
+  if (!merged.INITIAL_PASSWORD?.trim()) {
+    log(
+      "ℹ️  INITIAL_PASSWORD is not set — open the dashboard and create a password in the first-run setup."
+    );
+  } else if (merged.INITIAL_PASSWORD === "CHANGEME") {
+    log(
+      "⚠️  INITIAL_PASSWORD is still 'CHANGEME' — sign in with it, then change it in Settings → Security."
+    );
   }
 
   return merged;

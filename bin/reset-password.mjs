@@ -1,29 +1,40 @@
 #!/usr/bin/env node
 
 /**
- * Password Reset CLI — T-38
+ * Password Reset CLI
  *
- * Usage:
- *   node bin/reset-password.mjs
- *   npx coolrouter reset-password
+ * Usage (stop Cool Router first):
+ *   node bin/reset-password.mjs                         # source checkout
+ *   docker exec -it cool-router node reset-password.mjs # Docker image
+ *   DATA_DIR=/path/to/data node bin/reset-password.mjs  # custom data folder
  *
- * Resets the admin password for Cool Router.
- * Prompts for a new password and updates the database directly.
+ * Writes a new bcrypt password hash into DATA_DIR/storage.sqlite (settings namespace),
+ * the same place the dashboard stores it.
  *
  * @module bin/reset-password
  */
 
 import { createInterface } from "node:readline";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve, join } from "node:path";
+import { homedir } from "node:os";
 import { existsSync } from "node:fs";
 import bcrypt from "bcryptjs";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
+// Resolve the data directory exactly like the server (src/lib/dataPaths.ts).
+function resolveDataDir(env = process.env) {
+  const configured = env.DATA_DIR?.trim();
+  if (configured) return resolve(configured);
+  if (process.platform === "win32") {
+    const appData = env.APPDATA || join(homedir(), "AppData", "Roaming");
+    return join(appData, "coolrouter");
+  }
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) return join(resolve(xdg), "coolrouter");
+  return join(homedir(), ".coolrouter");
+}
 
-// Resolve data directory — same logic as the server
-const DATA_DIR = process.env.DATA_DIR || resolve(__dirname, "..", "data");
-const DB_PATH = resolve(DATA_DIR, "settings.db");
+const DATA_DIR = resolveDataDir();
+const DB_PATH = join(DATA_DIR, "storage.sqlite");
 
 const rl = createInterface({
   input: process.stdin,
@@ -62,7 +73,9 @@ async function main() {
   const db = new Database(DB_PATH);
 
   // Check current settings
-  const row = db.prepare("SELECT value FROM settings WHERE key = 'password'").get();
+  const row = db
+    .prepare("SELECT value FROM key_value WHERE namespace = 'settings' AND key = 'password'")
+    .get();
 
   if (row) {
     console.log("ℹ️  A password is currently set.");
@@ -90,19 +103,13 @@ async function main() {
 
   const hashed = generateSecretDigest(password);
 
-  // Upsert the password
-  const stmt = db.prepare(`
-    INSERT INTO settings (key, value) VALUES ('password', ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `);
-  stmt.run(hashed);
-
-  // Also ensure requireLogin is true
-  const loginStmt = db.prepare(`
-    INSERT INTO settings (key, value) VALUES ('requireLogin', 'true')
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value
-  `);
-  loginStmt.run();
+  // Upsert the password (values are stored as JSON in key_value)
+  const upsert = db.prepare(
+    "INSERT OR REPLACE INTO key_value (namespace, key, value) VALUES ('settings', ?, ?)"
+  );
+  upsert.run("password", JSON.stringify(hashed));
+  upsert.run("requireLogin", "true");
+  upsert.run("setupComplete", "true");
 
   db.close();
   rl.close();

@@ -168,25 +168,11 @@ if (!existsSync(serverJs)) {
   console.error("\x1b[31m✖ Server not found at:\x1b[0m", serverJs);
   console.error("  The package may not have been built correctly.");
   console.error("");
-  // (#492) Detect common non-standard Node managers that cause this issue
-  const nodeExec = process.execPath || "";
-  const isMise = nodeExec.includes("mise") || nodeExec.includes(".local/share/mise");
-  const isNvm = nodeExec.includes(".nvm") || nodeExec.includes("nvm");
-  if (isMise) {
-    console.error(
-      "  \x1b[33m⚠ mise detected:\x1b[0m If you installed via `npm install -g coolrouter`,"
-    );
-    console.error("    try: \x1b[36mnpx coolrouter@latest\x1b[0m  (downloads a fresh copy)");
-    console.error("    or:  \x1b[36mmise exec -- npx coolrouter\x1b[0m");
-  } else if (isNvm) {
-    console.error(
-      "  \x1b[33m⚠ nvm detected:\x1b[0m Try reinstalling after loading the correct Node version:"
-    );
-    console.error("    \x1b[36mnvm use --lts && npm install -g coolrouter\x1b[0m");
-  } else {
-    console.error("  Try: \x1b[36mnpm install -g coolrouter\x1b[0m  (reinstall)");
-    console.error("  Or:  \x1b[36mnpx coolrouter@latest\x1b[0m");
-  }
+  // Cool Router is not published to npm: run it from a built source checkout.
+  console.error("  Build it first from the repository root:");
+  console.error("    \x1b[36mnpm install && npm run build\x1b[0m");
+  console.error("  Or install the desktop app / Docker image:");
+  console.error("    \x1b[36mhttps://github.com/cyberromeo/coolrouter/releases/latest\x1b[0m");
   process.exit(1);
 }
 

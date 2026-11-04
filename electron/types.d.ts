@@ -21,12 +21,37 @@ export interface ServerStatus {
   port: number;
 }
 
+export interface UpdateState {
+  status:
+    | "idle"
+    | "checking"
+    | "available"
+    | "downloading"
+    | "downloaded"
+    | "not-available"
+    | "error"
+    | "disabled";
+  /** "auto": downloads + restart to update (Windows, AppImage). "notify": link to the release (macOS, .deb). */
+  strategy: "auto" | "notify";
+  currentVersion: string;
+  version: string | null;
+  percent: number | null;
+  releaseUrl: string;
+  message: string | null;
+  checkedAt: string | null;
+}
+
 export interface ElectronAPI {
   // ── Invoke (async) ─────────────────────────────────────
   getAppInfo(): Promise<AppInfo>;
   openExternal(url: string): Promise<void>;
   getDataDir(): Promise<string>;
   restartServer(): Promise<{ success: boolean }>;
+  getAppVersion(): Promise<string>;
+  checkForUpdates(): Promise<{ success: boolean; state?: UpdateState; error?: string }>;
+  downloadUpdate(): Promise<{ success: boolean; error?: string }>;
+  installUpdate(): Promise<void>;
+  getUpdateState(): Promise<UpdateState>;
 
   // ── Send (fire-and-forget) ─────────────────────────────
   minimizeWindow(): void;
@@ -36,6 +61,7 @@ export interface ElectronAPI {
   // ── Receive (returns disposer for cleanup) ─────────────
   onServerStatus(callback: (data: ServerStatus) => void): () => void;
   onPortChanged(callback: (port: number) => void): () => void;
+  onUpdateStatus(callback: (state: UpdateState) => void): () => void;
 
   // ── Static Properties ──────────────────────────────────
   isElectron: boolean;

@@ -2,18 +2,18 @@
 
 ## Quick fixes
 
-| Problem                                            | Fix                                                                           |
-| -------------------------------------------------- | ----------------------------------------------------------------------------- |
-| Can't sign in the first time                       | Use `INITIAL_PASSWORD` from `.env` (default `CHANGEME`)                       |
-| Forgot the dashboard password                      | Run `cool-router-reset-password` (or `npm run reset-password` from source)    |
-| Blank login page or "Module did not self-register" | You're on Node.js 24. Install Node 22 and run `npm rebuild better-sqlite3`    |
-| `EACCES: permission denied`                        | Point `DATA_DIR` at a folder you can write to                                 |
-| Port 20128 already in use                          | Set `PORT` to another port, or stop the other process                         |
-| `No credentials for provider: X`                   | Connect provider X on the Providers page, or use a model you have connected   |
-| `Invalid API key`                                  | The key must be created on the API Keys page. Check for stray spaces          |
-| `Missing API key`                                  | `REQUIRE_API_KEY=true` is on; send `Authorization: Bearer <key>`              |
-| App won't open on macOS                            | Unsigned build: right-click → Open, see [Install](INSTALL.md#unsigned-builds) |
-| SmartScreen warning on Windows                     | More info → Run anyway, see [Install](INSTALL.md#unsigned-builds)             |
+| Problem                                            | Fix                                                                                                                                                        |
+| -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Can't sign in the first time                       | There's no default password: finish the setup wizard. If `INITIAL_PASSWORD` is set (env or `.env`; 0.1.0 source installs used `CHANGEME`), sign in with it |
+| Forgot the dashboard password                      | Stop Cool Router, then `node bin/reset-password.mjs` (source) or `docker exec -it cool-router node reset-password.mjs` (Docker)                            |
+| Blank login page or "Module did not self-register" | You're on Node.js 24. Install Node 22 and run `npm rebuild better-sqlite3`                                                                                 |
+| `EACCES: permission denied`                        | Point `DATA_DIR` at a folder you can write to                                                                                                              |
+| Port 20128 already in use                          | Set `PORT` to another port, or stop the other process                                                                                                      |
+| `No credentials for provider: X`                   | Connect provider X on the Providers page, or use a model you have connected                                                                                |
+| `Invalid API key`                                  | The key must be created on the API Keys page. Check for stray spaces                                                                                       |
+| `Missing API key`                                  | `REQUIRE_API_KEY=true` is on; send `Authorization: Bearer <key>`                                                                                           |
+| App won't open on macOS                            | Unsigned build: right-click → Open, see [Install](INSTALL.md#unsigned-builds)                                                                              |
+| SmartScreen warning on Windows                     | More info → Run anyway, see [Install](INSTALL.md#unsigned-builds)                                                                                          |
 
 ## Providers
 

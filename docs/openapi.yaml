@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Cool Router API
-  version: 0.1.0
+  version: 0.1.1
   description: |
     Cool Router is a local-first AI API proxy router. It provides an OpenAI-compatible
     endpoint that routes requests to multiple AI providers with load balancing,
@@ -53,18 +53,12 @@ tags:
     description: Application settings
   - name: Usage
     description: Usage analytics and logs
-  - name: Translator
-    description: Format translation debug & testing
-  - name: CLI Tools
-    description: CLI tool configuration management
   - name: OAuth
     description: OAuth flows for provider authentication
   - name: System
     description: System management (restart, shutdown, backup)
   - name: Pricing
     description: Model pricing configuration
-  - name: Cloud
-    description: Cloud worker authentication and sync
   - name: Fallback
     description: Fallback chain management
   - name: Telemetry
@@ -750,6 +744,23 @@ paths:
         "200":
           description: Updated settings
 
+  /api/system/version:
+    get:
+      tags: [System]
+      summary: Current version and latest GitHub release (cached ~6h)
+      description: >-
+        Checks https://api.github.com/repos/cyberromeo/coolrouter/releases/latest. Returns
+        latest = null when offline. Disabled with COOLROUTER_DISABLE_UPDATE_CHECK=1.
+      responses:
+        "200":
+          description: Update status (current, latest, updateAvailable, release, install, upgradeCommand)
+    post:
+      tags: [System]
+      summary: Force a fresh update check
+      responses:
+        "200":
+          description: Update status
+
   /api/settings/combo-defaults:
     get:
       tags: [Settings]
@@ -1080,383 +1091,6 @@ paths:
 
   # ─── Translator ────────────────────────────────────────────────
 
-  /api/translator/detect:
-    post:
-      tags: [Translator]
-      summary: Detect request format
-      description: Detects the API format of a request body (OpenAI, Claude, Gemini, etc.)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [body]
-              properties:
-                body:
-                  type: object
-      responses:
-        "200":
-          description: Detected format
-
-  /api/translator/translate:
-    post:
-      tags: [Translator]
-      summary: Translate between formats
-      description: Converts a request between API formats (e.g. Claude → OpenAI)
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [sourceFormat, targetFormat, body]
-              properties:
-                step:
-                  type: string
-                sourceFormat:
-                  type: string
-                targetFormat:
-                  type: string
-                provider:
-                  type: string
-                body:
-                  type: object
-      responses:
-        "200":
-          description: Translated request
-
-  /api/translator/send:
-    post:
-      tags: [Translator]
-      summary: Send translated request to provider
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [provider, body]
-              properties:
-                provider:
-                  type: string
-                body:
-                  type: object
-      responses:
-        "200":
-          description: Provider response (may be SSE stream)
-
-  /api/translator/history:
-    get:
-      tags: [Translator]
-      summary: Get translation history
-      description: Returns recent translation events for the Live Monitor
-      responses:
-        "200":
-          description: Translation history entries
-
-  /api/translator/load:
-    get:
-      tags: [Translator]
-      summary: Load saved translation template
-      responses:
-        "200":
-          description: Template data
-
-  /api/translator/save:
-    post:
-      tags: [Translator]
-      summary: Save translation template
-      responses:
-        "200":
-          description: Template saved
-
-  # ─── CLI Tools ─────────────────────────────────────────────────
-
-  /api/cli-tools/backups:
-    get:
-      tags: [CLI Tools]
-      summary: List CLI tool backups
-      responses:
-        "200":
-          description: Backup list
-    post:
-      tags: [CLI Tools]
-      summary: Create CLI tool backup
-      responses:
-        "200":
-          description: Backup created
-
-  /api/cli-tools/runtime/{toolId}:
-    get:
-      tags: [CLI Tools]
-      summary: Get runtime status for a CLI tool
-      parameters:
-        - name: toolId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Runtime status
-
-  /api/cli-tools/guide-settings/{toolId}:
-    get:
-      tags: [CLI Tools]
-      summary: Get guide settings for a tool
-      parameters:
-        - name: toolId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Guide settings
-
-  /api/cli-tools/antigravity-mitm:
-    get:
-      tags: [CLI Tools]
-      summary: Get Antigravity MITM proxy settings
-      responses:
-        "200":
-          description: MITM proxy configuration
-    post:
-      tags: [CLI Tools]
-      summary: Update Antigravity MITM proxy settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Updated MITM proxy configuration
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Antigravity MITM proxy settings
-      responses:
-        "200":
-          description: MITM proxy settings reset
-
-  /api/cli-tools/antigravity-mitm/alias:
-    get:
-      tags: [CLI Tools]
-      summary: Get Antigravity MITM alias configuration
-      responses:
-        "200":
-          description: Alias configuration
-    put:
-      tags: [CLI Tools]
-      summary: Update Antigravity MITM alias configuration
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Updated alias configuration
-
-  /api/cli-tools/claude-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get Claude CLI settings
-      responses:
-        "200":
-          description: Claude CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply Claude CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Claude CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Claude CLI settings
-      responses:
-        "200":
-          description: Claude CLI settings reset
-
-  /api/cli-tools/cline-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get Cline CLI settings
-      responses:
-        "200":
-          description: Cline CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply Cline CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Cline CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Cline CLI settings
-      responses:
-        "200":
-          description: Cline CLI settings reset
-
-  /api/cli-tools/codex-profiles:
-    get:
-      tags: [CLI Tools]
-      summary: Get Codex profiles
-      responses:
-        "200":
-          description: Codex profile list
-    post:
-      tags: [CLI Tools]
-      summary: Create Codex profile
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Profile created
-    put:
-      tags: [CLI Tools]
-      summary: Update Codex profile
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Profile updated
-    delete:
-      tags: [CLI Tools]
-      summary: Delete Codex profile
-      responses:
-        "200":
-          description: Profile deleted
-
-  /api/cli-tools/codex-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get Codex CLI settings
-      responses:
-        "200":
-          description: Codex CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply Codex CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Codex CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Codex CLI settings
-      responses:
-        "200":
-          description: Codex CLI settings reset
-
-  /api/cli-tools/droid-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get Droid CLI settings
-      responses:
-        "200":
-          description: Droid CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply Droid CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Droid CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Droid CLI settings
-      responses:
-        "200":
-          description: Droid CLI settings reset
-
-  /api/cli-tools/kilo-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get Kilo CLI settings
-      responses:
-        "200":
-          description: Kilo CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply Kilo CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Kilo CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset Kilo CLI settings
-      responses:
-        "200":
-          description: Kilo CLI settings reset
-
-  /api/cli-tools/openclaw-settings:
-    get:
-      tags: [CLI Tools]
-      summary: Get OpenClaw CLI settings
-      responses:
-        "200":
-          description: OpenClaw CLI configuration
-    post:
-      tags: [CLI Tools]
-      summary: Apply OpenClaw CLI settings
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: OpenClaw CLI settings applied
-    delete:
-      tags: [CLI Tools]
-      summary: Reset OpenClaw CLI settings
-      responses:
-        "200":
-          description: OpenClaw CLI settings reset
-
-  # ─── OAuth ─────────────────────────────────────────────────────
-
   /api/oauth/{provider}/{action}:
     get:
       tags: [OAuth]
@@ -1564,72 +1198,6 @@ paths:
 
   # ─── Cloud ─────────────────────────────────────────────────────
 
-  /api/cloud/auth:
-    post:
-      tags: [Cloud]
-      summary: Authenticate with cloud worker
-      description: Authenticates with the Cool Router cloud worker for remote access.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Authentication result
-
-  /api/cloud/credentials/update:
-    put:
-      tags: [Cloud]
-      summary: Update cloud worker credentials
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Credentials updated
-
-  /api/cloud/model/resolve:
-    post:
-      tags: [Cloud]
-      summary: Resolve model via cloud
-      description: Resolves a model request through the cloud worker.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Resolved model info
-
-  /api/cloud/models/alias:
-    get:
-      tags: [Cloud]
-      summary: Get cloud model aliases
-      responses:
-        "200":
-          description: Cloud model alias list
-    put:
-      tags: [Cloud]
-      summary: Update cloud model alias
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Alias updated
-
-  # ─── Fallback ──────────────────────────────────────────────────
-
   /api/fallback/chains:
     get:
       tags: [Fallback]
@@ -1713,14 +1281,6 @@ paths:
         "200":
           description: Session cleared
 
-  /api/init:
-    get:
-      tags: [System]
-      summary: Initialize application
-      responses:
-        "200":
-          description: Init status
-
   /api/restart:
     post:
       tags: [System]
@@ -1758,24 +1318,6 @@ paths:
       responses:
         "200":
           description: Storage health status
-
-  /api/sync/cloud:
-    post:
-      tags: [System]
-      summary: Sync with cloud
-      responses:
-        "200":
-          description: Sync result
-
-  /api/sync/initialize:
-    post:
-      tags: [System]
-      summary: Initialize cloud sync
-      responses:
-        "200":
-          description: Sync initialized
-
-  # ─── Resilience & Monitoring ────────────────────────────────────
 
   /api/resilience:
     get:
@@ -1861,15 +1403,6 @@ paths:
 
   # ─── Telemetry & Token Health ───────────────────────────────────
 
-  /api/telemetry/summary:
-    get:
-      tags: [Telemetry]
-      summary: Get telemetry summary
-      description: Returns aggregated telemetry data including request metrics and performance stats.
-      responses:
-        "200":
-          description: Telemetry summary data
-
   /api/token-health:
     get:
       tags: [Telemetry]
@@ -1880,66 +1413,6 @@ paths:
           description: Token health status
 
   # ─── Evals & Policies ──────────────────────────────────────────
-
-  /api/evals:
-    get:
-      tags: [System]
-      summary: List eval suites
-      responses:
-        "200":
-          description: Eval suite list
-    post:
-      tags: [System]
-      summary: Run evaluation
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Eval results
-
-  /api/evals/{suiteId}:
-    get:
-      tags: [System]
-      summary: Get eval suite details
-      parameters:
-        - name: suiteId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Eval suite details
-
-  /api/policies:
-    get:
-      tags: [System]
-      summary: List routing policies
-      responses:
-        "200":
-          description: Policy list
-    post:
-      tags: [System]
-      summary: Create routing policy
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "201":
-          description: Created policy
-    delete:
-      tags: [System]
-      summary: Delete routing policy
-      responses:
-        "200":
-          description: Policy deleted
 
   /api/compliance/audit-log:
     get:

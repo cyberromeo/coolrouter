@@ -84,7 +84,11 @@ test("machineId: falls back to Linux machine-id files before hostname", async ()
   setPlatform("linux");
 
   fs.existsSync = (filePath) => filePath === "/etc/machine-id";
-  fs.readFileSync = (filePath, encoding) => {
+  fs.readFileSync = (filePath, encoding, ...rest) => {
+    // Module loaders (tsx) also read source files through fs.readFileSync.
+    if (typeof filePath !== "string" || !filePath.includes("machine-id")) {
+      return originalReadFileSync(filePath, encoding, ...rest);
+    }
     assert.equal(filePath, "/etc/machine-id");
     assert.equal(encoding, "utf8");
     return "LINUX-MACHINE-ID\n";

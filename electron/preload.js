@@ -22,6 +22,7 @@ const VALID_CHANNELS = {
     "download-update",
     "install-update",
     "get-app-version",
+    "get-update-state",
   ],
   send: ["window-minimize", "window-maximize", "window-close"],
   receive: ["server-status", "port-changed", "update-status"],
@@ -63,6 +64,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   checkForUpdates: () => safeInvoke("check-for-updates"),
   downloadUpdate: () => safeInvoke("download-update"),
   installUpdate: () => safeInvoke("install-update"),
+  getUpdateState: () => safeInvoke("get-update-state"),
 
   // ── Send (fire-and-forget) ───────────────────────────────
   minimizeWindow: () => safeSend("window-minimize"),

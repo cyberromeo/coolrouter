@@ -3,11 +3,12 @@ name: Release
 # Builds and signs every Cool Router artifact when a version tag is pushed:
 #   git tag v0.1.0 && git push origin v0.1.0
 #
-# Docker image  -> ghcr.io/<owner>/cool-router, signed with Sigstore cosign (keyless) + SBOM/provenance
+# Docker image  -> ghcr.io/cyberromeo/cool-router (ghcr.io/<owner>/cool-router), signed with Sigstore cosign (keyless) + SBOM/provenance
 # Linux         -> AppImage + .deb, signed with cosign sign-blob (keyless)
 # macOS         -> .dmg (arm64 + x64), Developer ID signed + notarized when Apple secrets are set
 # Windows       -> .exe (NSIS), Authenticode signed when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD are set
 # Every file gets a SHA256SUMS entry, and SHA256SUMS itself is signed.
+# latest.yml / latest-linux.yml (+ the .exe blockmap) feed the desktop app's electron-updater.
 #
 # Optional secrets (signing is skipped, not failed, when absent):
 #   CSC_LINK, CSC_KEY_PASSWORD              macOS Developer ID Application cert (.p12, base64)
@@ -151,6 +152,7 @@ jobs:
             electron/dist-electron/*.deb
             electron/dist-electron/*.dmg
             electron/dist-electron/*.exe
+            electron/dist-electron/*.exe.blockmap
             electron/dist-electron/latest*.yml
 
   release:

@@ -10,7 +10,7 @@ ENV_FILE="${WORKDIR}/.env"
 
 INITIAL_PASSWORD="$(sed -n 's/^INITIAL_PASSWORD=//p' "${ENV_FILE}" | head -n1)"
 if [[ -z "${INITIAL_PASSWORD}" ]]; then
-  INITIAL_PASSWORD="123456"
+  INITIAL_PASSWORD="CHANGEME"
 fi
 
 cleanup() {

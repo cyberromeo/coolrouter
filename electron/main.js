@@ -27,6 +27,8 @@ const {
   shell,
   session,
   Notification,
+  dialog,
+  net,
 } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
@@ -148,8 +150,43 @@ function hasEncryptedCredentials(dbPath) {
 }
 
 // ── Auto-Updater Configuration ──────────────────────────────
-autoUpdater.autoDownload = false;
-autoUpdater.autoInstallOnAppQuit = true;
+// Updates come from GitHub Releases (cyberromeo/coolrouter): latest.yml (Windows),
+// latest-linux.yml (AppImage). How an update is applied depends on the package:
+//   • Windows NSIS + Linux AppImage → electron-updater downloads it, then "Restart to update"
+//   • macOS (.dmg, unsigned) + Linux .deb → can't self-install, so we check the GitHub
+//     releases API and notify with a link to the release page instead.
+const UPDATE_REPO = "cyberromeo/coolrouter";
+const RELEASES_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
+const LATEST_RELEASE_API = `https://api.github.com/repos/${UPDATE_REPO}/releases/latest`;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const updateChecksDisabled = ["1", "true", "yes"].includes(
+  String(process.env.COOLROUTER_DISABLE_UPDATE_CHECK || "")
+    .trim()
+    .toLowerCase()
+);
+
+function getUpdateStrategy() {
+  if (process.platform === "win32") return "auto";
+  if (process.platform === "linux" && process.env.APPIMAGE) return "auto";
+  return "notify";
+}
+
+const updateStrategy = getUpdateStrategy();
+let updateState = {
+  status: "idle", // idle | checking | available | downloading | downloaded | not-available | error | disabled
+  strategy: updateStrategy,
+  currentVersion: app.getVersion(),
+  version: null,
+  percent: null,
+  releaseUrl: RELEASES_PAGE_URL,
+  message: null,
+  checkedAt: null,
+};
+let notifiedVersion = null;
+let updateTimer = null;
+
+autoUpdater.autoDownload = updateStrategy === "auto";
+autoUpdater.autoInstallOnAppQuit = updateStrategy === "auto";
 autoUpdater.logger = console;
 
 // ── Helper: Send IPC event to renderer (#5) ────────────────
@@ -193,70 +230,223 @@ async function waitForServerExit(proc, timeoutMs = 5000) {
   ]);
 }
 
-// ── Auto-Updater Event Handlers ─────────────────────────────
+// ── Auto-Updater ────────────────────────────────────────────
+function setUpdateState(patch) {
+  updateState = { ...updateState, ...patch };
+  sendToRenderer("update-status", updateState);
+}
+
+function releaseUrlFor(version) {
+  return version
+    ? `https://github.com/${UPDATE_REPO}/releases/tag/v${String(version).replace(/^v/, "")}`
+    : RELEASES_PAGE_URL;
+}
+
+function parseVersion(value) {
+  const m = String(value || "")
+    .trim()
+    .replace(/^v/i, "")
+    .match(/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?/);
+  return m ? { parts: [Number(m[1]), Number(m[2]), Number(m[3])], pre: m[4] || null } : null;
+}
+
+function isNewerVersion(candidate, current) {
+  const a = parseVersion(candidate);
+  const b = parseVersion(current);
+  if (!a || !b) return false;
+  for (let i = 0; i < 3; i++) {
+    if (a.parts[i] !== b.parts[i]) return a.parts[i] > b.parts[i];
+  }
+  if (a.pre === b.pre) return false;
+  if (!a.pre) return true;
+  if (!b.pre) return false;
+  return a.pre.localeCompare(b.pre, undefined, { numeric: true }) > 0;
+}
+
+function showUpdateNotification(title, body, onClick) {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({ title, body });
+  if (onClick) notification.on("click", onClick);
+  notification.show();
+}
+
 function setupAutoUpdater() {
+  if (updateStrategy !== "auto") return;
+
   autoUpdater.on("checking-for-update", () => {
-    sendToRenderer("update-status", { status: "checking" });
+    setUpdateState({ status: "checking", message: null });
     console.log("[Electron] Checking for updates...");
   });
 
   autoUpdater.on("update-available", (info) => {
-    sendToRenderer("update-status", { status: "available", version: info.version });
-    console.log("[Electron] Update available:", info.version);
+    setUpdateState({
+      status: "downloading",
+      version: info.version,
+      percent: 0,
+      releaseUrl: releaseUrlFor(info.version),
+      checkedAt: new Date().toISOString(),
+    });
+    console.log("[Electron] Update available, downloading:", info.version);
+    if (notifiedVersion !== info.version) {
+      notifiedVersion = info.version;
+      showUpdateNotification(
+        "Cool Router update available",
+        `Downloading version ${info.version} in the background…`
+      );
+    }
   });
 
-  autoUpdater.on("update-not-available", (info) => {
-    sendToRenderer("update-status", { status: "not-available", version: info.version });
+  autoUpdater.on("update-not-available", () => {
+    setUpdateState({
+      status: "not-available",
+      version: null,
+      percent: null,
+      checkedAt: new Date().toISOString(),
+    });
     console.log("[Electron] No update available");
   });
 
   autoUpdater.on("download-progress", (progress) => {
-    sendToRenderer("update-status", {
-      status: "downloading",
-      percent: Math.round(progress.percent),
-      transferred: progress.transferred,
-      total: progress.total,
-    });
+    setUpdateState({ status: "downloading", percent: Math.round(progress.percent) });
   });
 
-  autoUpdater.on("update-downloaded", (info) => {
-    sendToRenderer("update-status", { status: "downloaded", version: info.version });
+  autoUpdater.on("update-downloaded", async (info) => {
+    setUpdateState({ status: "downloaded", version: info.version, percent: 100 });
     console.log("[Electron] Update downloaded:", info.version);
-
-    if (Notification.isSupported()) {
-      const notification = new Notification({
-        title: "Cool Router Update Ready",
-        body: `Version ${info.version} is ready to install. Click to restart.`,
+    createTray(); // adds "Restart to Update"
+    showUpdateNotification(
+      "Cool Router update ready",
+      `Version ${info.version} is ready. Click to restart and update.`,
+      () => installUpdate()
+    );
+    try {
+      const { response } = await dialog.showMessageBox({
+        type: "info",
+        title: "Update ready",
+        message: `Cool Router ${info.version} is ready to install.`,
+        detail: "Restart now to update, or it will be installed the next time you quit.",
+        buttons: ["Restart to update", "Later"],
+        defaultId: 0,
+        cancelId: 1,
       });
-      notification.on("click", () => {
-        autoUpdater.quitAndInstall();
-      });
-      notification.show();
+      if (response === 0) installUpdate();
+    } catch {
+      /* dialog unavailable — notification + tray item still offer the restart */
     }
   });
 
   autoUpdater.on("error", (error) => {
-    sendToRenderer("update-status", { status: "error", message: error.message });
+    setUpdateState({ status: "error", message: error?.message || String(error) });
     console.error("[Electron] Update error:", error);
   });
 }
 
-async function checkForUpdates(silent = false) {
-  if (isDev) {
-    console.log("[Electron] Dev mode — skipping auto-update");
-    if (!silent) {
-      sendToRenderer("update-status", { status: "error", message: "Updates disabled in dev mode" });
-    }
+// macOS / .deb: no self-install. Ask GitHub for the latest release and link to it.
+async function checkGitHubRelease(mode) {
+  setUpdateState({ status: "checking", message: null });
+  const res = await net.fetch(LATEST_RELEASE_API, {
+    headers: {
+      Accept: "application/vnd.github+json",
+      "User-Agent": `cool-router-desktop/${app.getVersion()}`,
+    },
+  });
+  if (!res.ok) throw new Error(`GitHub answered ${res.status}`);
+  const body = await res.json();
+  const latest = String(body.tag_name || "").replace(/^v/i, "");
+  const checkedAt = new Date().toISOString();
+  if (!isNewerVersion(latest, app.getVersion())) {
+    setUpdateState({ status: "not-available", version: null, checkedAt });
+    if (mode === "tray") showUpToDateDialog();
     return;
   }
-  await autoUpdater.checkForUpdates();
+  const releaseUrl = body.html_url || releaseUrlFor(latest);
+  setUpdateState({ status: "available", version: latest, releaseUrl, checkedAt });
+  createTray();
+  if (notifiedVersion !== latest || mode === "tray") {
+    notifiedVersion = latest;
+    const hint =
+      process.platform === "darwin"
+        ? "Click to download the new .dmg."
+        : "Click to download the new package.";
+    showUpdateNotification(`Cool Router ${latest} is available`, hint, () =>
+      shell.openExternal(releaseUrl)
+    );
+  }
+}
+
+function showUpToDateDialog() {
+  dialog
+    .showMessageBox({
+      type: "info",
+      title: "No updates",
+      message: `You're on the latest version (${app.getVersion()}).`,
+    })
+    .catch(() => {});
+}
+
+/**
+ * mode: "background" (launch + every 6h: quiet on errors),
+ *       "tray" (menu click: dialogs for "up to date"),
+ *       "ui" (Settings button in the dashboard: result shown in-app).
+ */
+async function checkForUpdates(mode = "background") {
+  const silent = mode === "background";
+  if (isDev) {
+    console.log("[Electron] Dev mode — skipping update check");
+    if (!silent) setUpdateState({ status: "error", message: "Updates are disabled in dev mode" });
+    return;
+  }
+  if (updateChecksDisabled) {
+    setUpdateState({ status: "disabled", message: "COOLROUTER_DISABLE_UPDATE_CHECK is set" });
+    return;
+  }
+  // Don't restart a download that is already underway or finished.
+  if (updateState.status === "downloading" || updateState.status === "downloaded") {
+    sendToRenderer("update-status", updateState);
+    return;
+  }
+  try {
+    if (updateStrategy === "auto") {
+      const result = await autoUpdater.checkForUpdates();
+      if (
+        mode === "tray" &&
+        result &&
+        !isNewerVersion(result.updateInfo?.version, app.getVersion())
+      ) {
+        showUpToDateDialog();
+      }
+    } else {
+      await checkGitHubRelease(mode);
+    }
+  } catch (error) {
+    const message = error?.message || String(error);
+    console.warn("[Electron] Update check failed:", message);
+    // Offline or rate-limited: stay quiet on background checks.
+    setUpdateState({ status: silent ? "idle" : "error", message });
+  }
+}
+
+function scheduleUpdateChecks() {
+  if (isDev || updateChecksDisabled) return;
+  setTimeout(() => checkForUpdates("background"), 5000);
+  updateTimer = setInterval(() => checkForUpdates("background"), UPDATE_CHECK_INTERVAL_MS);
 }
 
 async function downloadUpdate() {
-  await autoUpdater.downloadUpdate();
+  if (updateStrategy === "auto") {
+    await autoUpdater.downloadUpdate();
+  } else {
+    await shell.openExternal(updateState.releaseUrl || RELEASES_PAGE_URL);
+  }
 }
 
 function installUpdate() {
+  if (updateStrategy !== "auto" || updateState.status !== "downloaded") {
+    shell.openExternal(updateState.releaseUrl || RELEASES_PAGE_URL);
+    return;
+  }
+  app.isQuitting = true;
+  if (updateTimer) clearInterval(updateTimer);
   if (nextServer) {
     nextServer.kill("SIGTERM");
     nextServer = null;
@@ -397,9 +587,19 @@ function createTray() {
       ],
     },
     { type: "separator" },
+    ...(updateState.status === "downloaded"
+      ? [{ label: `Restart to Update (${updateState.version})`, click: () => installUpdate() }]
+      : updateState.status === "available"
+        ? [
+            {
+              label: `Download Cool Router ${updateState.version}…`,
+              click: () => shell.openExternal(updateState.releaseUrl || RELEASES_PAGE_URL),
+            },
+          ]
+        : []),
     {
       label: "Check for Updates",
-      click: () => checkForUpdates(false),
+      click: () => checkForUpdates("tray"),
     },
     { type: "separator" },
     {
@@ -554,6 +754,7 @@ function startNextServer() {
       ...serverEnv,
       DATA_DIR: dataDir,
       PORT: String(serverPort),
+      COOLROUTER_INSTALL_KIND: "desktop",
       NODE_ENV: "production",
     },
     stdio: "pipe",
@@ -640,11 +841,11 @@ function setupIpcHandlers() {
   // Auto-update IPC handlers
   ipcMain.handle("check-for-updates", async () => {
     try {
-      await checkForUpdates(false);
-      return { success: true };
+      await checkForUpdates("ui");
+      return { success: true, state: updateState };
     } catch (error) {
       console.error("[Electron] Check for updates failed:", error);
-      sendToRenderer("update-status", { status: "error", message: error.message });
+      setUpdateState({ status: "error", message: error.message });
       return { success: false, error: error.message };
     }
   });
@@ -655,7 +856,7 @@ function setupIpcHandlers() {
       return { success: true };
     } catch (error) {
       console.error("[Electron] Download update failed:", error);
-      sendToRenderer("update-status", { status: "error", message: error.message });
+      setUpdateState({ status: "error", message: error.message });
       return { success: false, error: error.message };
     }
   });
@@ -666,6 +867,8 @@ function setupIpcHandlers() {
   });
 
   ipcMain.handle("get-app-version", () => app.getVersion());
+
+  ipcMain.handle("get-update-state", () => updateState);
 }
 
 // ── App Lifecycle ──────────────────────────────────────────
@@ -684,12 +887,8 @@ app.whenReady().then(async () => {
   setupIpcHandlers();
   setupAutoUpdater();
 
-  // Check for updates after a short delay (don't block startup)
-  if (!isDev) {
-    setTimeout(() => {
-      checkForUpdates(true);
-    }, 3000);
-  }
+  // Check for updates shortly after launch, then every 6 hours (never blocks startup)
+  scheduleUpdateChecks();
 
   // macOS: recreate window when dock icon clicked
   app.on("activate", () => {

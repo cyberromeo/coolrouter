@@ -37,19 +37,32 @@ If a provider is rate-limited or down, a **combo** falls back to the next model 
 
 ## Install
 
-| Platform | Get it                                                                                                               |
-| -------- | -------------------------------------------------------------------------------------------------------------------- |
-| macOS    | `.dmg` from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest) (Apple Silicon and Intel)          |
-| Windows  | `.exe` installer from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest)                          |
-| Linux    | `.AppImage` or `.deb` from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest)                     |
-| Docker   | `docker run -d -p 20128:20128 -v cool-router-data:/app/data ghcr.io/cyberromeo/cool-router:latest`                   |
-| Source   | `git clone https://github.com/cyberromeo/coolrouter && cd cool-router && npm install && npm run build && npm start` |
+| Platform | Get it                                                                                                             |
+| -------- | ------------------------------------------------------------------------------------------------------------------ |
+| macOS    | `.dmg` from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest) (Apple Silicon and Intel)         |
+| Windows  | `.exe` installer from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest)                         |
+| Linux    | `.AppImage` or `.deb` from [Releases](https://github.com/cyberromeo/coolrouter/releases/latest)                    |
+| Docker   | `docker run -d -p 20128:20128 -v cool-router-data:/app/data ghcr.io/cyberromeo/cool-router:latest`                 |
+| Source   | `git clone https://github.com/cyberromeo/coolrouter && cd coolrouter && npm install && npm run build && npm start` |
 
 Full instructions, including checksum and signature verification: [docs/INSTALL.md](docs/INSTALL.md).
 
+## Updates
+
+Cool Router checks [GitHub Releases](https://github.com/cyberromeo/coolrouter/releases) for new versions (on launch and every 6 hours) and tells you when one is out. **Settings → General → Updates** shows your version and has a **Check for updates** button.
+
+| Install                 | How you update                                                                                       |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- |
+| Windows, Linux AppImage | Downloads in the background, then **Restart to update**                                              |
+| macOS, Linux `.deb`     | Notification and banner link to the new installer (unsigned builds can't self-install)               |
+| Docker                  | `docker pull ghcr.io/cyberromeo/cool-router:latest && docker compose up -d` (or re-run `docker run`) |
+| Source                  | `git pull && npm install && npm run build`, then restart                                             |
+
+Set `COOLROUTER_DISABLE_UPDATE_CHECK=1` to turn the check off.
+
 ## Quick start
 
-1. Open **http://localhost:20128** and sign in. The first password is `INITIAL_PASSWORD` from `.env` (default `CHANGEME`). Change it in **Settings → Security**.
+1. Open **http://localhost:20128**. On first launch the setup wizard asks you to **create a password** (desktop app, Docker and source all work the same way; there is no built-in default). If you set `INITIAL_PASSWORD` for a headless deploy, sign in with that instead and change it in **Settings → Security**.
 2. **Providers** → pick a provider → add your API key or sign in.
 3. **API Keys** → **Create API Key** and copy it.
 4. Call the gateway:
@@ -109,7 +122,7 @@ npm run test:unit
 npm run build
 ```
 
-Requires Node.js 20 or 22 (`>=18 <24`; Node 24 is not supported by the SQLite driver). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Requires Node.js 18, 20 or 22 (`package.json` engines: `>=18 <24`; Node 22 LTS recommended, Node 24 is not supported by the SQLite driver). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 
