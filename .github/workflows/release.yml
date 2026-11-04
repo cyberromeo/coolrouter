@@ -1,0 +1,182 @@
+name: Release
+
+# Builds and signs every Cool Router artifact when a version tag is pushed:
+#   git tag v0.1.0 && git push origin v0.1.0
+#
+# Docker image  -> ghcr.io/<owner>/cool-router, signed with Sigstore cosign (keyless) + SBOM/provenance
+# Linux         -> AppImage + .deb, signed with cosign sign-blob (keyless)
+# macOS         -> .dmg (arm64 + x64), Developer ID signed + notarized when Apple secrets are set
+# Windows       -> .exe (NSIS), Authenticode signed when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD are set
+# Every file gets a SHA256SUMS entry, and SHA256SUMS itself is signed.
+#
+# Optional secrets (signing is skipped, not failed, when absent):
+#   CSC_LINK, CSC_KEY_PASSWORD              macOS Developer ID Application cert (.p12, base64)
+#   APPLE_ID, APPLE_APP_SPECIFIC_PASSWORD, APPLE_TEAM_ID   notarization
+#   WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD      Windows code-signing cert (.pfx, base64)
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+  attestations: write
+
+env:
+  NODE_VERSION: "22"
+
+jobs:
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: sigstore/cosign-installer@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/cool-router
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner-base
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          sbom: true
+          provenance: mode=max
+      - name: Sign image (keyless)
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          for tag in $TAGS; do cosign sign --yes "${tag}@${DIGEST}"; done
+
+  desktop:
+    name: Desktop (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+          - os: macos-latest # Apple Silicon
+            target: mac
+          - os: macos-15-intel # Intel
+            target: mac
+          - os: windows-latest
+            target: win
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Build web app
+        run: npm run build
+        env:
+          NODE_OPTIONS: --max-old-space-size=6144
+      - name: Install desktop dependencies
+        working-directory: electron
+        run: npm install --no-audit --no-fund
+      - name: Bundle server and Node.js runtime
+        working-directory: electron
+        run: npm run prepare:bundle
+
+      - name: Build Linux
+        if: matrix.target == 'linux'
+        working-directory: electron
+        run: npx electron-builder --linux AppImage deb --publish never
+
+      - name: Build macOS
+        if: matrix.target == 'mac'
+        working-directory: electron
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -z "$CSC_LINK" ]; then
+            echo "::warning::No Apple Developer ID secrets: building an unsigned .dmg"
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+            npx electron-builder --mac --publish never -c.mac.identity=null
+          elif [ -n "$APPLE_ID" ]; then
+            npx electron-builder --mac --publish never -c.mac.notarize=true
+          else
+            npx electron-builder --mac --publish never
+          fi
+
+      - name: Build Windows
+        if: matrix.target == 'win'
+        working-directory: electron
+        shell: bash
+        env:
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ -z "$WIN_CSC_LINK" ]; then
+            echo "::warning::No Windows signing secrets: building an unsigned .exe"
+            export CSC_IDENTITY_AUTO_DISCOVERY=false
+          else
+            export CSC_LINK="$WIN_CSC_LINK" CSC_KEY_PASSWORD="$WIN_CSC_KEY_PASSWORD"
+          fi
+          npx electron-builder --win --publish never
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.target }}-${{ runner.arch }}
+          if-no-files-found: error
+          path: |
+            electron/dist-electron/*.AppImage
+            electron/dist-electron/*.deb
+            electron/dist-electron/*.dmg
+            electron/dist-electron/*.exe
+            electron/dist-electron/latest*.yml
+
+  release:
+    name: Publish release
+    needs: [docker, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: sigstore/cosign-installer@v3
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums and signatures
+        working-directory: dist
+        run: |
+          sha256sum * > SHA256SUMS
+          for f in *.AppImage *.deb SHA256SUMS; do
+            cosign sign-blob --yes --bundle "$f.sigstore.json" "$f"
+          done
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/*"
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Cool Router ${{ github.ref_name }}
+          generate_release_notes: true
+          files: dist/*

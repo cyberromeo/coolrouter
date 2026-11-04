@@ -1,0 +1,30 @@
+# Cool Router — Docker Compose
+#
+#   docker compose up -d        # start
+#   docker compose logs -f      # follow logs
+#   docker compose down         # stop
+#
+# Dashboard and API: http://localhost:20128  (API base URL: http://localhost:20128/v1)
+
+services:
+  cool-router:
+    image: ghcr.io/cyberromeo/cool-router:latest
+    build:
+      context: .
+      target: runner-base
+    container_name: cool-router
+    restart: unless-stopped
+    stop_grace_period: 30s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PORT=20128
+      - DATA_DIR=/app/data
+    ports:
+      - "${PORT:-20128}:20128"
+    volumes:
+      - cool-router-data:/app/data
+
+volumes:
+  cool-router-data:

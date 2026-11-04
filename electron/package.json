@@ -1,0 +1,134 @@
+{
+  "name": "cool-router-desktop",
+  "version": "0.1.0",
+  "description": "Cool Router desktop app",
+  "main": "main.js",
+  "author": {
+    "name": "Cool Router",
+    "email": "74863261+cyberromeo@users.noreply.github.com"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/cyberromeo/coolrouter",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --no-sandbox",
+    "prepare:bundle": "node ../scripts/prepare-electron-standalone.mjs && npm run prepare:node",
+    "build": "npm run prepare:bundle && electron-builder",
+    "build:win": "npm run prepare:bundle && electron-builder --win",
+    "build:mac": "npm run prepare:bundle && electron-builder --mac",
+    "build:mac-x64": "npm run prepare:bundle && electron-builder --mac --x64",
+    "build:mac-arm64": "npm run prepare:bundle && electron-builder --mac --arm64",
+    "build:linux": "npm run prepare:bundle && electron-builder --linux",
+    "pack": "npm run prepare:bundle && electron-builder --dir",
+    "prepare:node": "node -e \"const fs=require('fs'),p=require('path');fs.mkdirSync('node-bin',{recursive:true});const n=process.platform==='win32'?'node.exe':'node';fs.copyFileSync(process.execPath,p.join('node-bin',n));fs.chmodSync(p.join('node-bin',n),0o755);console.log('bundled',process.execPath,process.version)\""
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "devDependencies": {
+    "electron": "^40.6.1",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.cyberromeo.coolrouter",
+    "productName": "Cool Router",
+    "copyright": "Copyright © 2026 Cool Router contributors",
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "assets"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "cyberromeo",
+      "repo": "coolrouter"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../.next/electron-standalone",
+        "to": "app",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "assets",
+        "to": "assets",
+        "filter": [
+          "icon.png",
+          "tray-icon.png"
+        ]
+      },
+      {
+        "from": "node-bin",
+        "to": "node",
+        "filter": [
+          "node",
+          "node.exe"
+        ]
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis"
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg"
+        }
+      ],
+      "icon": "assets/icon.icns",
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "assets/entitlements.mac.plist",
+      "entitlementsInherit": "assets/entitlements.mac.plist"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage"
+        },
+        {
+          "target": "deb"
+        }
+      ],
+      "icon": "assets/icons",
+      "category": "Development",
+      "maintainer": "cyberromeo <74863261+cyberromeo@users.noreply.github.com>",
+      "synopsis": "One endpoint for every AI model"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
+    },
+    "dmg": {
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    },
+    "artifactName": "Cool-Router-${version}-${os}-${arch}.${ext}"
+  }
+}
