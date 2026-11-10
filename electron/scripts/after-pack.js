@@ -48,6 +48,32 @@ function findMachOFiles(dir, found = []) {
   return found;
 }
 
+/**
+ * Remove symlinks that point outside the app bundle, to an absolute path, or nowhere.
+ *
+ * macOS refuses to seal such a bundle ("invalid destination for symbolic link in
+ * bundle"), with an ad-hoc identity and with a Developer ID alike. They come from the
+ * server's node_modules — typically node-gyp's `build/node_gyp_bins/python3`, an absolute
+ * link to the build machine's Python — and nothing uses them at runtime.
+ */
+function removeInvalidSymlinks(dir, bundleRoot, removed = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      const target = fs.readlinkSync(full);
+      const resolved = path.resolve(path.dirname(full), target);
+      const inside = resolved === bundleRoot || resolved.startsWith(bundleRoot + path.sep);
+      if (path.isAbsolute(target) || !inside || !fs.existsSync(resolved)) {
+        fs.rmSync(full, { force: true });
+        removed.push(`${path.relative(bundleRoot, full)} -> ${target}`);
+      }
+    } else if (entry.isDirectory()) {
+      removeInvalidSymlinks(full, bundleRoot, removed);
+    }
+  }
+  return removed;
+}
+
 function codesign(args) {
   execFileSync("codesign", args, { stdio: ["ignore", "pipe", "pipe"] });
 }
@@ -64,6 +90,25 @@ exports.default = async function afterPack(context) {
   if (context.electronPlatformName !== "darwin") return;
   if (process.platform !== "darwin") return; // codesign only exists on macOS
 
+  const appName = `${context.packager.appInfo.productFilename}.app`;
+  const appPath = path.join(context.appOutDir, appName);
+  if (!fs.existsSync(appPath)) {
+    throw new Error(`after-pack: app bundle not found at ${appPath}`);
+  }
+  const resourcesDir = path.join(appPath, "Contents", "Resources");
+
+  // Needed whichever identity signs the bundle.
+  // Walk the real path so "inside the bundle" is compared like with like (/tmp is itself
+  // a symlink on macOS).
+  const realAppPath = fs.realpathSync(appPath);
+  const removedLinks = removeInvalidSymlinks(
+    path.join(realAppPath, "Contents", "Resources"),
+    realAppPath
+  );
+  for (const link of removedLinks) {
+    console.log(`  • after-pack: removed symlink that would break signing: ${link}`);
+  }
+
   if (willSignWithCertificate(context)) {
     console.log(
       "  • after-pack: a signing identity is configured — leaving signing to electron-builder"
@@ -71,15 +116,8 @@ exports.default = async function afterPack(context) {
     return;
   }
 
-  const appName = `${context.packager.appInfo.productFilename}.app`;
-  const appPath = path.join(context.appOutDir, appName);
-  if (!fs.existsSync(appPath)) {
-    throw new Error(`after-pack: app bundle not found at ${appPath}`);
-  }
-
   // Inside-out: loose executables in Resources first (codesign --deep only descends into
   // standard nested-code locations such as Frameworks), then the bundle itself.
-  const resourcesDir = path.join(appPath, "Contents", "Resources");
   const looseBinaries = findMachOFiles(resourcesDir);
   for (const file of looseBinaries) {
     codesign(["--force", "--sign", "-", "--timestamp=none", file]);
