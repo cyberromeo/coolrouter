@@ -3,8 +3,7 @@ import Database from "better-sqlite3";
 import path from "path";
 import fs from "fs";
 import os from "os";
-import { getDbInstance, resetDbInstance, SQLITE_FILE } from "@/lib/db/core";
-import { backupDbFile } from "@/lib/db/backup";
+import { importDbFile } from "@/lib/db/backup";
 import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 
 const MAX_UPLOAD_SIZE = 100 * 1024 * 1024; // 100 MB
@@ -84,94 +83,65 @@ export async function POST(request: Request) {
     fs.writeFileSync(tmpPath, fileBuffer!);
 
     // Validate SQLite integrity
+    let validationError: string | null = null;
     let testDb: InstanceType<typeof Database> | null = null;
     try {
       testDb = new Database(tmpPath, { readonly: true });
       const result = testDb.pragma("integrity_check") as any[];
       if (result[0]?.integrity_check !== "ok") {
-        return NextResponse.json(
-          { error: "Database integrity check failed. The file may be corrupted." },
-          { status: 400 }
-        );
+        validationError = "Database integrity check failed. The file may be corrupted.";
+      } else {
+        // Validate required tables exist
+        const tables = testDb
+          .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+          .all()
+          .map((row: any) => row.name);
+
+        const missingTables = REQUIRED_TABLES.filter((t) => !tables.includes(t));
+        if (missingTables.length > 0) {
+          validationError = `Invalid Cool Router database. Missing tables: ${missingTables.join(", ")}`;
+        }
       }
-
-      // Validate required tables exist
-      const tables = testDb
-        .prepare("SELECT name FROM sqlite_master WHERE type='table'")
-        .all()
-        .map((row: any) => row.name);
-
-      const missingTables = REQUIRED_TABLES.filter((t) => !tables.includes(t));
-      if (missingTables.length > 0) {
-        return NextResponse.json(
-          {
-            error: `Invalid Cool Router database. Missing tables: ${missingTables.join(", ")}`,
-          },
-          { status: 400 }
-        );
-      }
-
-      testDb.close();
-      testDb = null;
     } catch (e) {
-      if (testDb) testDb.close();
-      return NextResponse.json({ error: `Invalid database file: ${e.message}` }, { status: 400 });
-    }
-
-    // Create pre-import backup
-    backupDbFile("pre-import");
-
-    // Close and reset current DB connection
-    resetDbInstance();
-
-    // Remove main file and WAL sidecars
-    const sqliteFilesToReplace = [
-      SQLITE_FILE,
-      `${SQLITE_FILE}-wal`,
-      `${SQLITE_FILE}-shm`,
-      `${SQLITE_FILE}-journal`,
-    ];
-    for (const filePath of sqliteFilesToReplace) {
-      if (!filePath) continue;
-      if (fs.existsSync(filePath)) {
-        fs.unlinkSync(filePath);
+      validationError = `Invalid database file: ${e.message}`;
+    } finally {
+      // Close on every path. A handle left open keeps the temp file locked on Windows,
+      // so the cleanup below would silently fail and leak the upload in the temp dir.
+      try {
+        testDb?.close();
+      } catch {
+        /* ignore */
       }
     }
+    if (validationError) {
+      return NextResponse.json({ error: validationError }, { status: 400 });
+    }
 
-    // Copy imported file over current DB
-    fs.copyFileSync(tmpPath, SQLITE_FILE!);
-
-    // Reopen and verify
-    const db = getDbInstance();
-    const connCount =
-      (db.prepare("SELECT COUNT(*) as cnt FROM provider_connections").get() as any)?.cnt || 0;
-    const nodeCount =
-      (db.prepare("SELECT COUNT(*) as cnt FROM provider_nodes").get() as any)?.cnt || 0;
-    const comboCount = (db.prepare("SELECT COUNT(*) as cnt FROM combos").get() as any)?.cnt || 0;
-    const keyCount = (db.prepare("SELECT COUNT(*) as cnt FROM api_keys").get() as any)?.cnt || 0;
+    // Snapshot the current DB (awaited), then swap the file. Shares the restore path:
+    // Windows-safe unlink, cached-statement reset, no window for a concurrent reopen.
+    const counts = await importDbFile(tmpPath);
 
     console.log(
-      `[DB] Imported database from upload: ${connCount} connections, ${nodeCount} nodes, ${comboCount} combos, ${keyCount} API keys`
+      `[DB] Imported database from upload: ${counts.connectionCount} connections, ${counts.nodeCount} nodes, ${counts.comboCount} combos, ${counts.apiKeyCount} API keys`
     );
 
     return NextResponse.json({
       imported: true,
       filename: fileName,
-      connectionCount: connCount,
-      nodeCount,
-      comboCount,
-      apiKeyCount: keyCount,
+      ...counts,
     });
   } catch (error) {
     console.error("[API] Error importing database:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
   } finally {
-    // Cleanup temp file
-    if (tmpPath && fs.existsSync(tmpPath)) {
-      try {
-        fs.unlinkSync(tmpPath);
-      } catch {
-        /* best effort */
+    // Cleanup temp file (and the -wal/-shm sidecars a read-only open of a WAL database leaves)
+    if (tmpPath) {
+      for (const filePath of [tmpPath, `${tmpPath}-wal`, `${tmpPath}-shm`]) {
+        try {
+          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        } catch {
+          /* best effort */
+        }
       }
     }
   }

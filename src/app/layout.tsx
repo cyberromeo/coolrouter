@@ -18,6 +18,13 @@ const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
 });
 
+/**
+ * Runs before first paint. The theme lives in localStorage (zustand `persist`), which
+ * React only reads after hydration — without this every page load flashes the light
+ * palette before snapping to dark. Keep in sync with THEME_CONFIG and themeStore.
+ */
+const THEME_BOOT_SCRIPT = `(function(){var d=document.documentElement;try{var t="dark";var s=localStorage.getItem("theme");if(s){var p=JSON.parse(s);if(p&&p.state&&typeof p.state.theme==="string")t=p.state.theme}if(t==="system")t=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";d.classList.toggle("dark",t==="dark")}catch(e){d.classList.add("dark")}})();`;
+
 export async function generateMetadata() {
   const settings = await getSettings();
   const instanceName = settings?.instanceName || "Cool Router";
@@ -40,7 +47,10 @@ export default async function RootLayout({ children }) {
   const isRtl = RTL_LOCALES.includes(locale as (typeof RTL_LOCALES)[number]);
 
   return (
-    <html lang={locale} dir={isRtl ? "rtl" : "ltr"} suppressHydrationWarning>
+    <html lang={locale} dir={isRtl ? "rtl" : "ltr"} className="dark" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
         suppressHydrationWarning

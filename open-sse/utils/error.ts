@@ -1,6 +1,7 @@
 import { getCorsOrigin } from "./cors.ts";
 import { ERROR_TYPES, DEFAULT_ERROR_MESSAGES } from "../config/constants.ts";
 import { normalizePayloadForLog } from "@/lib/logPayloads";
+import { extractErrorMessage } from "./sseDataTransform.ts";
 
 /**
  * Build OpenAI-compatible error response body
@@ -22,6 +23,75 @@ export function buildErrorBody(statusCode, message) {
       code: errorInfo.code,
     },
   };
+}
+
+// Anthropic Messages API error types by HTTP status.
+const CLAUDE_ERROR_TYPES: Record<number, string> = {
+  400: "invalid_request_error",
+  401: "authentication_error",
+  403: "permission_error",
+  404: "not_found_error",
+  413: "request_too_large",
+  429: "rate_limit_error",
+  503: "overloaded_error",
+  529: "overloaded_error",
+};
+
+/**
+ * Build an Anthropic-compatible error response body:
+ * `{ type: "error", error: { type, message } }`
+ * @param {number} statusCode - HTTP status code
+ * @param {string} message - Error message
+ * @returns {object} Error response object
+ */
+export function buildClaudeErrorBody(statusCode: number, message?: string | null) {
+  return {
+    type: "error",
+    error: {
+      type:
+        CLAUDE_ERROR_TYPES[statusCode] ||
+        (statusCode >= 500 ? "api_error" : "invalid_request_error"),
+      message: message || DEFAULT_ERROR_MESSAGES[statusCode] || "An error occurred",
+    },
+  };
+}
+
+/**
+ * Re-shape an error Response from the chat pipeline (OpenAI error shape) into the shape
+ * Anthropic Messages clients expect. Status and headers are kept. Successful responses,
+ * non-JSON bodies and bodies already in the Anthropic shape are returned as they are.
+ * @param {Response} response - Response returned by the chat pipeline
+ * @returns {Promise<Response>}
+ */
+export async function toClaudeErrorResponse(response: Response): Promise<Response> {
+  if (!response || response.ok) return response;
+  const contentType = (response.headers.get("content-type") || "").toLowerCase();
+  if (!contentType.includes("application/json")) return response;
+
+  const text = await response.text();
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+
+  let payload: unknown = null;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = null;
+  }
+
+  const record =
+    payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const alreadyClaudeShaped =
+    record?.type === "error" && !!record.error && typeof record.error === "object";
+
+  const body =
+    !record || alreadyClaudeShaped
+      ? text
+      : JSON.stringify(
+          buildClaudeErrorBody(response.status, extractErrorMessage(record, response.statusText))
+        );
+
+  return new Response(body, { status: response.status, statusText: response.statusText, headers });
 }
 
 /**

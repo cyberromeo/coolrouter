@@ -1,6 +1,6 @@
 {
   "name": "cool-router-desktop",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Cool Router desktop app",
   "main": "main.js",
   "author": {
@@ -45,8 +45,11 @@
     "files": [
       "main.js",
       "preload.js",
+      "splash.html",
       "package.json"
     ],
+    "afterPack": "scripts/after-pack.js",
+    "npmRebuild": false,
     "extraResources": [
       {
         "from": "../.next/electron-standalone",
@@ -113,7 +116,9 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "installerIcon": "assets/icon.ico",
-      "uninstallerIcon": "assets/icon.ico"
+      "uninstallerIcon": "assets/icon.ico",
+      "include": "assets/installer.nsh",
+      "shortcutName": "Cool Router"
     },
     "dmg": {
       "contents": [

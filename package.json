@@ -1,7 +1,7 @@
 {
   "name": "cool-router",
-  "version": "0.1.1",
-  "description": "Cool Router \u2014 a clean, modern AI router. One OpenAI-compatible endpoint for every provider, with smart fallback.",
+  "version": "0.1.2",
+  "description": "Cool Router — a clean, modern AI router. One OpenAI-compatible endpoint for every provider, with smart fallback.",
   "type": "module",
   "bin": {
     "cool-router": "bin/coolrouter.mjs",
@@ -23,7 +23,7 @@
     "open-sse"
   ],
   "engines": {
-    "node": ">=18.0.0 <24.0.0"
+    "node": ">=20.9.0 <25"
   },
   "keywords": [
     "ai",
@@ -78,7 +78,8 @@
     "electron:build": "npm run build && cd electron && npm run build",
     "electron:build:win": "npm run build && cd electron && npm run build:win",
     "electron:build:mac": "npm run build && cd electron && npm run build:mac",
-    "electron:build:linux": "npm run build && cd electron && npm run build:linux"
+    "electron:build:linux": "npm run build && cd electron && npm run build:linux",
+    "test:desktop": "node scripts/desktop-smoke-test.mjs"
   },
   "dependencies": {
     "@lobehub/icons": "^5.23.1",

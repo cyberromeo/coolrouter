@@ -10,7 +10,7 @@
  */
 
 import { useNotificationStore } from "@/store/notificationStore";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const ICONS = {
   success: "✓",
@@ -42,37 +42,51 @@ const COLORS = {
   },
 };
 
-function Toast({ notification, onDismiss }) {
+function Toast({ notification, count = 1, onDismiss }) {
   const [isExiting, setIsExiting] = useState(false);
+  // Latest callback: a duplicate may join this toast while the exit animation runs.
+  const onDismissRef = useRef(onDismiss);
+  useEffect(() => {
+    onDismissRef.current = onDismiss;
+  }, [onDismiss]);
 
   const handleDismiss = () => {
     setIsExiting(true);
-    setTimeout(() => onDismiss(notification.id), 200);
+    setTimeout(() => {
+      onDismissRef.current();
+      setIsExiting(false);
+    }, 200);
   };
 
   const color = COLORS[notification.type] || COLORS.info;
 
   return (
     <div
-      role="alert"
-      aria-live="polite"
+      // Errors interrupt (alert); everything else is announced politely (status).
+      role={notification.type === "error" ? "alert" : "status"}
       style={{
         display: "flex",
         alignItems: "flex-start",
         gap: "12px",
         padding: "14px 16px",
         borderRadius: "10px",
-        backgroundColor: color.bg,
+        // Opaque theme surface with the type tint on top. The tint alone (15% alpha) over
+        // the page, with the old fixed white/light-grey text, was unreadable in the light
+        // theme: the text colours referenced CSS variables that do not exist.
+        backgroundColor: "var(--color-surface, #0a0a0a)",
+        backgroundImage: `linear-gradient(${color.bg}, ${color.bg})`,
         border: `1px solid ${color.border}`,
-        backdropFilter: "blur(12px)",
         boxShadow: "0 8px 32px rgba(0,0,0,0.2)",
-        minWidth: "320px",
-        maxWidth: "420px",
+        // Same 320–420px as before, but never wider than a narrow phone screen (the
+        // container sits 20px from the edge).
+        minWidth: "min(320px, calc(100vw - 40px))",
+        maxWidth: "min(420px, calc(100vw - 40px))",
         animation: isExiting ? "toastOut 0.2s ease-in forwards" : "toastIn 0.3s ease-out forwards",
         transition: "all 0.2s ease",
       }}
     >
       <span
+        aria-hidden="true"
         style={{
           fontSize: "18px",
           color: color.icon,
@@ -89,7 +103,7 @@ function Toast({ notification, onDismiss }) {
             style={{
               fontWeight: 600,
               fontSize: "14px",
-              color: "var(--text-primary, #fff)",
+              color: "var(--color-text-main, #ededed)",
               marginBottom: "2px",
             }}
           >
@@ -99,22 +113,25 @@ function Toast({ notification, onDismiss }) {
         <div
           style={{
             fontSize: "13px",
-            color: "var(--text-secondary, #ccc)",
+            color: "var(--color-text-main, #ededed)",
             lineHeight: 1.4,
+            overflowWrap: "anywhere",
           }}
         >
           {notification.message}
+          {count > 1 && <span style={{ opacity: 0.7 }}> (×{count})</span>}
         </div>
       </div>
       {notification.dismissible && (
         <button
+          type="button"
           onClick={handleDismiss}
           aria-label="Dismiss notification"
           style={{
             background: "none",
             border: "none",
             cursor: "pointer",
-            color: "var(--text-secondary, #999)",
+            color: "var(--color-text-muted, #a1a1a1)",
             fontSize: "16px",
             padding: "0 2px",
             lineHeight: 1,
@@ -136,6 +153,22 @@ export default function NotificationToast() {
 
   if (notifications.length === 0) return null;
 
+  // Identical notifications (a failing action clicked again, several rows failing with the
+  // same error) share one toast instead of stacking a column of copies down the screen.
+  const groups: { key: string; notification: (typeof notifications)[number]; ids: number[] }[] = [];
+  const groupByKey = new Map<string, (typeof groups)[number]>();
+  for (const n of notifications) {
+    const key = `${n.type}\u0000${n.title || ""}\u0000${n.message}`;
+    const existing = groupByKey.get(key);
+    if (existing) {
+      existing.ids.push(n.id);
+    } else {
+      const group = { key, notification: n, ids: [n.id] };
+      groupByKey.set(key, group);
+      groups.push(group);
+    }
+  }
+
   return (
     <>
       <style>{`
@@ -149,8 +182,6 @@ export default function NotificationToast() {
         }
       `}</style>
       <div
-        aria-live="polite"
-        aria-atomic="false"
         style={{
           position: "fixed",
           top: "20px",
@@ -162,9 +193,13 @@ export default function NotificationToast() {
           pointerEvents: "none",
         }}
       >
-        {notifications.map((n) => (
-          <div key={n.id} style={{ pointerEvents: "auto" }}>
-            <Toast notification={n} onDismiss={removeNotification} />
+        {groups.map((group) => (
+          <div key={group.key} style={{ pointerEvents: "auto" }}>
+            <Toast
+              notification={group.notification}
+              count={group.ids.length}
+              onDismiss={() => group.ids.forEach((id) => removeNotification(id))}
+            />
           </div>
         ))}
       </div>

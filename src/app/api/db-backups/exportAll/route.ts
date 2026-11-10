@@ -3,6 +3,7 @@ import { getDbInstance, SQLITE_FILE } from "@/lib/db/core";
 import fs from "fs";
 import path from "path";
 import os from "os";
+import { execFileSync } from "node:child_process";
 
 /**
  * GET /api/db-backups/exportAll
@@ -26,9 +27,11 @@ export async function GET() {
       // Create temp directory
       fs.mkdirSync(tempDir, { recursive: true });
 
-      // 1. Export database using native backup API
+      // 1. Export database using native backup API. Must be awaited: the snapshot is written
+      // asynchronously, and the archive used to be built (and the temp dir removed) before
+      // the first page was copied, so "full backup" archives shipped without storage.sqlite.
       const dbBackupPath = path.join(tempDir, "storage.sqlite");
-      db.backup(dbBackupPath);
+      await db.backup(dbBackupPath);
 
       // 2. Export settings as JSON
       const settings: Record<string, string> = {};
@@ -98,12 +101,14 @@ export async function GET() {
       };
       fs.writeFileSync(path.join(tempDir, "metadata.json"), JSON.stringify(metadata, null, 2));
 
-      // Create ZIP using tar (available on all Linux/macOS, and the archiver npm package is not installed)
-      // We'll use Node.js built-in zlib to create a simple tar.gz instead
-      const { execSync } = require("node:child_process");
+      // Create the archive with the system tar (Linux/macOS, and bsdtar on Windows 10+).
+      // Run it inside the temp dir with relative names: GNU tar (e.g. Git for Windows' tar
+      // when it comes first in PATH) treats "C:\..." as a remote host and fails.
       const tarPath = zipPath.replace(".zip", ".tar.gz");
-      execSync(`tar -czf "${tarPath}" -C "${path.dirname(tempDir)}" "${path.basename(tempDir)}"`, {
+      execFileSync("tar", ["-czf", path.basename(tarPath), path.basename(tempDir)], {
+        cwd: path.dirname(tempDir),
         timeout: 30000,
+        windowsHide: true,
       });
 
       // Read the archive
@@ -125,7 +130,8 @@ export async function GET() {
       // Cleanup on error
       try {
         if (fs.existsSync(tempDir)) fs.rmSync(tempDir, { recursive: true, force: true });
-        if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
+        const tarPath = zipPath.replace(".zip", ".tar.gz");
+        if (fs.existsSync(tarPath)) fs.unlinkSync(tarPath);
       } catch {
         /* ignore cleanup errors */
       }

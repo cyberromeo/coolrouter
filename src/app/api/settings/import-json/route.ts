@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDbInstance } from "@/lib/db/core";
-import { backupDbFile } from "@/lib/db/backup";
+import { createDbBackupAndWait } from "@/lib/db/backup";
+import { encryptConnectionFields } from "@/lib/db/encryption";
 import { isAuthRequired, isAuthenticated } from "@/shared/utils/apiAuth";
 import { runJsonMigration, type LegacyJsonData } from "@/lib/db/jsonMigration";
 
@@ -44,7 +45,15 @@ export async function POST(request: Request) {
       data = JSON.parse(rawText) as LegacyJsonData;
     } catch {
       return NextResponse.json(
-        { error: "Invalid JSON: the file could not be parsed. Please upload a valid .json backup." },
+        {
+          error: "Invalid JSON: the file could not be parsed. Please upload a valid .json backup.",
+        },
+        { status: 400 }
+      );
+    }
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+      return NextResponse.json(
+        { error: "Invalid backup: expected a JSON object. Please upload a valid .json backup." },
         { status: 400 }
       );
     }
@@ -55,10 +64,22 @@ export async function POST(request: Request) {
       data = { ...data, settings: safeSettings };
     }
 
-    const db = getDbInstance();
+    // JSON backups carry credentials in plaintext; store them the way every other write
+    // path does (encrypted at rest when STORAGE_ENCRYPTION_KEY is set, no-op otherwise).
+    if (Array.isArray(data.providerConnections)) {
+      data = {
+        ...data,
+        providerConnections: data.providerConnections.map((conn) =>
+          conn && typeof conn === "object" ? encryptConnectionFields({ ...conn }) : conn
+        ),
+      };
+    }
 
-    // Create a safety backup before writing anything
-    backupDbFile("pre-json-import");
+    // Create a safety backup before writing anything. Awaited: backupDbFile() only starts
+    // a (throttled) copy, which would run after the import and capture the imported data.
+    await createDbBackupAndWait("pre-json-import");
+
+    const db = getDbInstance();
 
     // Delegate the actual migration to the shared helper (avoids duplication with core.ts)
     const counts = runJsonMigration(db, data);

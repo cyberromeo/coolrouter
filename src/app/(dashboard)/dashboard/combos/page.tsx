@@ -17,6 +17,7 @@ import ModelRoutingSection from "@/shared/components/ModelRoutingSection";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useNotificationStore } from "@/store/notificationStore";
 import { ROUTING_STRATEGIES } from "@/shared/constants/routingStrategies";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import { useTranslations } from "next-intl";
 
 // Validate combo name: letters, numbers, -, _, /, .
@@ -454,13 +455,32 @@ export default function CombosPage() {
         body: JSON.stringify(data),
       });
       if (res.ok) {
+        // POST /api/combos stores only name/models/strategy/config: the agent settings pass
+        // its validation but are dropped. Apply them with an update (which does store them),
+        // otherwise a system message set while creating a combo is silently lost.
+        const created = await res.json().catch(() => null);
+        const agentSettings: Record<string, unknown> = {};
+        if (data.system_message) agentSettings.system_message = data.system_message;
+        if (data.tool_filter_regex) agentSettings.tool_filter_regex = data.tool_filter_regex;
+        if (data.context_cache_protection) agentSettings.context_cache_protection = true;
+        if (created?.id && Object.keys(agentSettings).length > 0) {
+          const followUp = await fetch(`/api/combos/${created.id}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(agentSettings),
+          });
+          if (!followUp.ok) {
+            notify.error("Combo created, but its agent settings could not be saved.");
+          }
+        }
+
         await fetchData();
         setShowCreateModal(false);
         setRecentlyCreatedCombo(data.name?.trim() || "");
         notify.success(t("comboCreated"));
       } else {
-        const err = await res.json();
-        notify.error(err.error?.message || err.error || t("failedCreate"));
+        const err = await res.json().catch(() => null);
+        notify.error(getApiErrorMessage(err, t("failedCreate")));
       }
     } catch (error) {
       notify.error(t("errorCreating"));
@@ -479,8 +499,8 @@ export default function CombosPage() {
         setEditingCombo(null);
         notify.success(t("comboUpdated"));
       } else {
-        const err = await res.json();
-        notify.error(err.error?.message || err.error || t("failedUpdate"));
+        const err = await res.json().catch(() => null);
+        notify.error(getApiErrorMessage(err, t("failedUpdate")));
       }
     } catch (error) {
       notify.error(t("errorUpdating"));
@@ -492,8 +512,11 @@ export default function CombosPage() {
     try {
       const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
       if (res.ok) {
-        setCombos(combos.filter((c) => c.id !== id));
+        setCombos((prev) => prev.filter((c) => c.id !== id));
         notify.success(t("comboDeleted"));
+      } else {
+        const err = await res.json().catch(() => null);
+        notify.error(getApiErrorMessage(err, t("errorDeleting")));
       }
     } catch (error) {
       notify.error(t("errorDeleting"));
@@ -510,12 +533,16 @@ export default function CombosPage() {
       newName = `${baseName}-copy-${counter}`;
     }
 
-    const data = {
+    const data: Record<string, unknown> = {
       name: newName,
       models: combo.models,
       strategy: combo.strategy || "priority",
       config: combo.config || {},
     };
+    // A copy must behave like the original: carry the agent settings over as well.
+    if (combo.system_message) data.system_message = combo.system_message;
+    if (combo.tool_filter_regex) data.tool_filter_regex = combo.tool_filter_regex;
+    if (combo.context_cache_protection) data.context_cache_protection = true;
 
     await handleCreate(data);
   };
@@ -542,11 +569,13 @@ export default function CombosPage() {
     // Optimistic update
     setCombos((prev) => prev.map((c) => (c.id === combo.id ? { ...c, isActive: newActive } : c)));
     try {
-      await fetch(`/api/combos/${combo.id}`, {
+      const res = await fetch(`/api/combos/${combo.id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ isActive: newActive }),
       });
+      // fetch only rejects on network errors; a 4xx/5xx must roll the switch back too.
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (error) {
       // Revert on error
       setCombos((prev) =>
@@ -726,7 +755,7 @@ export default function CombosPage() {
       {/* Combos List */}
       {combos.length === 0 ? (
         <EmptyState
-          icon="🧩"
+          icon="layers"
           title={t("noCombosYet")}
           description={t("description")}
           actionLabel={t("createCombo")}
@@ -1844,12 +1873,15 @@ function ComboFormModal({ isOpen, combo, onClose, onSave, activeProviders }) {
     }
 
     // Agent features (#399 / #401 / #454)
+    // An update is merged into the stored combo, so a field that is left out keeps its old
+    // value. When editing, send the cleared value explicitly ("" / false) — otherwise a
+    // removed system message or tool filter silently stays active.
     if (agentSystemMessage.trim()) saveData.system_message = agentSystemMessage.trim();
-    else delete saveData.system_message;
+    else if (combo?.system_message) saveData.system_message = "";
     if (agentToolFilter.trim()) saveData.tool_filter_regex = agentToolFilter.trim();
-    else delete saveData.tool_filter_regex;
+    else if (combo?.tool_filter_regex) saveData.tool_filter_regex = "";
     if (agentContextCache) saveData.context_cache_protection = true;
-    else delete saveData.context_cache_protection;
+    else if (combo?.context_cache_protection) saveData.context_cache_protection = false;
 
     await onSave(saveData);
     setSaving(false);

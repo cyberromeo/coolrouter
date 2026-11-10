@@ -6,6 +6,7 @@ import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 /**
  * Kiro Social OAuth Modal (Google/GitHub)
@@ -29,10 +30,10 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         setStep("loading");
 
         const res = await fetch(`/api/oauth/kiro/social-authorize?provider=${provider}`);
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
 
         if (!res.ok) {
-          throw new Error(data.error);
+          throw new Error(getApiErrorMessage(data, "Could not start the sign-in"));
         }
 
         setAuthData(data);
@@ -75,6 +76,10 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         throw new Error("No authorization code found in URL");
       }
 
+      if (!authData?.codeVerifier) {
+        throw new Error("Sign-in session not initialized. Close this dialog and try again.");
+      }
+
       // Exchange code for tokens
       const res = await fetch("/api/oauth/kiro/social-exchange", {
         method: "POST",
@@ -86,8 +91,8 @@ export default function KiroSocialOAuthModal({ isOpen, provider, onSuccess, onCl
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(getApiErrorMessage(data, "Sign-in failed"));
 
       setStep("success");
       onSuccess?.();

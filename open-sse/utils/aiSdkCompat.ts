@@ -12,17 +12,48 @@ export function clientWantsJsonResponse(acceptHeader: unknown): boolean {
 }
 
 /**
+ * Detects when a client explicitly asks for a server-sent event stream.
+ */
+export function clientAcceptsEventStream(acceptHeader: unknown): boolean {
+  return (
+    typeof acceptHeader === "string" && acceptHeader.toLowerCase().includes("text/event-stream")
+  );
+}
+
+/**
+ * Client formats whose API specs define `stream` as optional and defaulting to `false`:
+ * OpenAI Chat Completions, OpenAI Responses and Anthropic Messages.
+ */
+const NON_STREAMING_BY_DEFAULT_FORMATS = new Set(["openai", "openai-responses", "claude"]);
+
+/**
  * Resolves stream behavior from request body + Accept header.
  * Priority: explicit `stream: true/false` in body wins.
  * Accept header only acts as fallback when stream is not explicitly set.
  * Fixes #656: clients sending both `stream: true` and `Accept: application/json`
  * should still get streaming responses — body intent takes precedence.
+ *
+ * When `stream` is omitted the default depends on the client format:
+ * - OpenAI / OpenAI Responses / Anthropic (`sourceFormat` given): non-streaming, as their
+ *   specs require, unless the Accept header explicitly includes `text/event-stream`.
+ *   A wildcard or missing Accept (curl, fetch, Python requests) is therefore non-streaming.
+ * - Any other format, or no `sourceFormat`: legacy behavior — stream unless the client
+ *   explicitly prefers JSON. Those formats carry no `stream` field (Gemini-style clients
+ *   pick the mode with the URL) or default to streaming (Ollama).
  */
-export function resolveStreamFlag(bodyStream: unknown, acceptHeader: unknown): boolean {
+export function resolveStreamFlag(
+  bodyStream: unknown,
+  acceptHeader: unknown,
+  sourceFormat?: unknown
+): boolean {
   // Explicit body value always wins
   if (bodyStream === true) return true;
   if (bodyStream === false) return false;
-  // No explicit stream param — fall back to Accept header heuristic
+  // No explicit stream param — spec default for formats that define one
+  if (typeof sourceFormat === "string" && NON_STREAMING_BY_DEFAULT_FORMATS.has(sourceFormat)) {
+    return clientAcceptsEventStream(acceptHeader);
+  }
+  // Legacy fallback: Accept header heuristic
   return !clientWantsJsonResponse(acceptHeader);
 }
 

@@ -1,6 +1,10 @@
 import { CORS_ORIGIN, CORS_HEADERS } from "@/shared/utils/cors";
 import { buildClientRawRequest, handleChat } from "@/sse/handlers/chat";
 import { initTranslators } from "@coolrouter/open-sse/translator/index.ts";
+import {
+  textCompletionToChatRequest,
+  transformToTextCompletion,
+} from "@coolrouter/open-sse/utils/textCompletionTransform.ts";
 import { createInjectionGuard } from "@/middleware/promptInjectionGuard";
 
 let initPromise = null;
@@ -61,21 +65,16 @@ export async function POST(request: Request) {
       }
 
       // Normalize legacy completions format: { prompt, model } → { messages, model }
-      // If the body has `prompt` but no `messages`, convert to chat format.
+      // If the body has `prompt` but no `messages`, convert to chat format and answer in
+      // the legacy shape (object "text_completion", choices[].text).
       if (body.prompt !== undefined && !body.messages) {
-        const prompt = Array.isArray(body.prompt) ? body.prompt.join("\n") : String(body.prompt);
-        const normalized = {
-          ...body,
-          messages: [{ role: "user", content: prompt }],
-        };
-        delete normalized.prompt;
-
         const newRequest = new Request(request.url, {
           method: request.method,
           headers: request.headers,
-          body: JSON.stringify(normalized),
+          body: JSON.stringify(textCompletionToChatRequest(body)),
         });
-        return await handleChat(newRequest, buildClientRawRequest(request, body));
+        const response = await handleChat(newRequest, buildClientRawRequest(request, body));
+        return await transformToTextCompletion(response);
       }
     }
   } catch (error) {

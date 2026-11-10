@@ -68,7 +68,54 @@ async function ensureSecrets(): Promise<void> {
   }
 }
 
+/**
+ * Desktop app only: the Electron shell starts this server as a child process and passes
+ * its own PID. If the shell disappears without stopping us (crash, force-close, an
+ * installer killing the app) nothing else would — the orphan keeps the port, and on
+ * Windows keeps the install folder locked so the next update fails. Poll the parent and
+ * exit when it is gone.
+ */
+function watchParentProcess(): void {
+  const parentPid = Number.parseInt(process.env.COOLROUTER_PARENT_PID || "", 10);
+  if (!Number.isInteger(parentPid) || parentPid <= 1) return;
+
+  const timer = setInterval(() => {
+    try {
+      // Signal 0 only tests for existence. EPERM still means "alive".
+      process.kill(parentPid, 0);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException)?.code === "ESRCH") {
+        console.log(`[STARTUP] Desktop shell (pid ${parentPid}) is gone — shutting down.`);
+        process.exit(0);
+      }
+    }
+  }, 1000);
+  timer.unref();
+
+  // The shell also keeps our stdin pipe open and closes it to ask for a clean stop.
+  // Windows has no SIGTERM — child.kill() there ends the process on the spot, skipping
+  // the request drain and the SQLite checkpoint — so this is the graceful path on every
+  // platform. The pipe also closes by itself the instant the shell dies.
+  if (process.env.COOLROUTER_PARENT_STDIN === "1") {
+    let stopping = false;
+    const stop = () => {
+      if (stopping) return;
+      stopping = true;
+      console.log("[STARTUP] Desktop shell asked the server to stop.");
+      import("@/lib/gracefulShutdown")
+        .then(({ requestProcessShutdown }) => requestProcessShutdown())
+        .catch(() => process.exit(0));
+    };
+    process.stdin.on("end", stop);
+    process.stdin.on("close", stop);
+    process.stdin.on("error", () => {});
+    process.stdin.resume();
+  }
+}
+
 export async function registerNodejs(): Promise<void> {
+  watchParentProcess();
+
   // Initialize proxy fetch patch FIRST (before any HTTP requests)
   await import("@coolrouter/open-sse/index.ts");
   console.log("[STARTUP] Global fetch proxy patch initialized");

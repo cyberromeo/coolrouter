@@ -4,6 +4,10 @@ import { useEffect, useRef, useId } from "react";
 import { cn } from "@/shared/utils/cn";
 import Button from "./Button";
 
+// Open modals, innermost last. Several can be stacked (a confirm dialog over an editor),
+// so scroll locking and Escape have to know which one is on top.
+const openModals: symbol[] = [];
+
 interface ModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -27,9 +31,17 @@ export default function Modal({
   closeOnOverlay = true,
   showCloseButton = true,
   className,
+  maxWidth,
 }: ModalProps) {
   const titleId = useId();
   const dialogRef = useRef(null);
+  const modalKey = useRef(Symbol("modal"));
+  // Keep the latest onClose without re-running the effects when the parent passes a new
+  // inline function on every render.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   const sizes = {
     sm: "max-w-sm",
@@ -39,28 +51,32 @@ export default function Modal({
     full: "max-w-4xl",
   };
 
-  // Lock body scroll when modal is open
+  // Lock body scroll while any modal is open. Closing one of two stacked modals must
+  // not unlock the page under the one that is still showing.
   useEffect(() => {
-    if (isOpen) {
-      document.body.style.overflow = "hidden";
-    } else {
-      document.body.style.overflow = "";
-    }
+    if (!isOpen) return;
+    const key = modalKey.current;
+    openModals.push(key);
+    document.body.style.overflow = "hidden";
     return () => {
-      document.body.style.overflow = "";
+      const index = openModals.lastIndexOf(key);
+      if (index !== -1) openModals.splice(index, 1);
+      if (openModals.length === 0) document.body.style.overflow = "";
     };
   }, [isOpen]);
 
-  // Handle escape key
+  // Escape closes only the topmost modal.
   useEffect(() => {
+    if (!isOpen) return;
+    const key = modalKey.current;
     const handleEscape = (e) => {
-      if (e.key === "Escape" && isOpen) {
-        onClose();
-      }
+      if (e.key !== "Escape" || e.defaultPrevented) return;
+      if (openModals[openModals.length - 1] !== key) return;
+      onCloseRef.current?.();
     };
     document.addEventListener("keydown", handleEscape);
     return () => document.removeEventListener("keydown", handleEscape);
-  }, [isOpen, onClose]);
+  }, [isOpen]);
 
   // Focus trap
   useEffect(() => {
@@ -68,13 +84,18 @@ export default function Modal({
 
     const dialog = dialogRef.current;
     const focusableSelector =
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+      'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+    // Give focus back to whatever opened the modal when it closes.
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
-    // Focus first focusable element
-    const firstFocusable = dialog.querySelector(focusableSelector);
-    if (firstFocusable) {
-      setTimeout(() => firstFocusable.focus(), 50);
-    }
+    // Start in the body (the first field) rather than on the close button in the header.
+    const firstFocusable =
+      dialog.querySelector(`[data-modal-body] :is(${focusableSelector})`) ||
+      dialog.querySelector(focusableSelector);
+    const focusTimer = setTimeout(() => {
+      if (firstFocusable && !dialog.contains(document.activeElement)) firstFocusable.focus();
+    }, 50);
 
     const handleTab = (e) => {
       if (e.key !== "Tab") return;
@@ -95,7 +116,11 @@ export default function Modal({
     };
 
     dialog.addEventListener("keydown", handleTab);
-    return () => dialog.removeEventListener("keydown", handleTab);
+    return () => {
+      clearTimeout(focusTimer);
+      dialog.removeEventListener("keydown", handleTab);
+      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -120,7 +145,8 @@ export default function Modal({
           "border border-border",
           "rounded-xl shadow-2xl",
           "animate-in fade-in zoom-in-95 duration-200",
-          sizes[size],
+          // `maxWidth` is the older name some callers still pass for `size`.
+          sizes[maxWidth && maxWidth in sizes ? maxWidth : size],
           className
         )}
       >
@@ -136,6 +162,7 @@ export default function Modal({
             </div>
             {showCloseButton && (
               <button
+                type="button"
                 onClick={onClose}
                 aria-label="Close"
                 className="p-1.5 rounded-lg text-text-muted hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
@@ -149,7 +176,9 @@ export default function Modal({
         )}
 
         {/* Body */}
-        <div className="p-6 max-h-[calc(80vh-140px)] overflow-y-auto">{children}</div>
+        <div data-modal-body className="p-6 max-h-[calc(80vh-140px)] overflow-y-auto">
+          {children}
+        </div>
 
         {/* Footer */}
         {footer && (

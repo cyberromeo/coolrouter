@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { Card, Button, Input } from "@/shared/components";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
 import { useTranslations } from "next-intl";
 
 const MODES = [
@@ -22,6 +23,7 @@ export default function IPFilterSection() {
   const [loading, setLoading] = useState(true);
   const [newIP, setNewIP] = useState("");
   const [listTarget, setListTarget] = useState("blacklist");
+  const [updateError, setUpdateError] = useState("");
   const t = useTranslations("settings");
 
   useEffect(() => {
@@ -39,6 +41,7 @@ export default function IPFilterSection() {
   };
 
   const updateConfig = async (updates) => {
+    setUpdateError("");
     try {
       const res = await fetch("/api/settings/ip-filter", {
         method: "PUT",
@@ -46,7 +49,11 @@ export default function IPFilterSection() {
         body: JSON.stringify(updates),
       });
       if (res.ok) setConfig(await res.json());
-    } catch {}
+      // A rejected change used to be dropped silently, so the control looked dead.
+      else setUpdateError(await readApiError(res, t("saveFailed")));
+    } catch {
+      setUpdateError(t("saveFailed"));
+    }
   };
 
   const setMode = (mode) => {
@@ -57,9 +64,12 @@ export default function IPFilterSection() {
     }
   };
 
-  const addIP = () => {
+  // `target` is passed in by the Block / Allow buttons: they call setListTarget() in the
+  // same click, and reading the listTarget state here would still see the previous value —
+  // "Allow" on a fresh form put the address on the blocked list.
+  const addIP = (target = listTarget) => {
     if (!newIP.trim()) return;
-    const key = listTarget === "blacklist" ? "addBlacklist" : "addWhitelist";
+    const key = target === "blacklist" ? "addBlacklist" : "addWhitelist";
     updateConfig({ [key]: newIP.trim() });
     setNewIP("");
   };
@@ -116,6 +126,12 @@ export default function IPFilterSection() {
         ))}
       </div>
 
+      {updateError && (
+        <p className="text-sm text-red-500 mb-4" role="alert">
+          {updateError}
+        </p>
+      )}
+
       {config.enabled && (
         <div className="flex flex-col gap-4">
           {/* Add IP */}
@@ -126,7 +142,7 @@ export default function IPFilterSection() {
                 placeholder={t("ipAddressPlaceholder")}
                 value={newIP}
                 onChange={(e) => setNewIP(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && addIP()}
+                onKeyDown={(e) => e.key === "Enter" && addIP(listTarget)}
               />
             </div>
             <div className="flex gap-1 pb-[2px]">
@@ -135,7 +151,7 @@ export default function IPFilterSection() {
                 variant={listTarget === "blacklist" ? "danger" : "secondary"}
                 onClick={() => {
                   setListTarget("blacklist");
-                  if (newIP.trim()) addIP();
+                  if (newIP.trim()) addIP("blacklist");
                 }}
               >
                 {t("block")}
@@ -145,7 +161,7 @@ export default function IPFilterSection() {
                 variant={listTarget === "whitelist" ? "primary" : "secondary"}
                 onClick={() => {
                   setListTarget("whitelist");
-                  if (newIP.trim()) addIP();
+                  if (newIP.trim()) addIP("whitelist");
                 }}
               >
                 {t("allow")}

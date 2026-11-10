@@ -36,6 +36,13 @@ const nextConfig = {
     "util",
   ],
   transpilePackages: ["@coolrouter/open-sse"],
+  experimental: {
+    // src/proxy.ts runs in front of every /api route, and Next buffers at most 10 MB of
+    // a request body for the proxy by default — larger uploads (database import, audio
+    // transcription) reached their handlers cut off. Match the 100 MB those routes allow
+    // (src/shared/middleware/bodySizeGuard.ts).
+    proxyClientMaxBodySize: "100mb",
+  },
   allowedDevOrigins: ["localhost", "127.0.0.1", "192.168.*"],
   typescript: {
     // TODO: Re-enable after fixing all sub-component useTranslations scope issues
@@ -165,6 +172,11 @@ const nextConfig = {
       {
         source: "/v1",
         destination: "/api/v1",
+      },
+      // Gemini-format clients call {base}/v1beta/models/{model}:generateContent
+      {
+        source: "/v1beta/:path*",
+        destination: "/api/v1beta/:path*",
       },
     ];
   },

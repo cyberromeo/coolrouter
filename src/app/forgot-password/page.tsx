@@ -1,93 +1,120 @@
 "use client";
 
-import { useTranslations } from "next-intl";
-
 /**
- * Forgot Password Page — Phase 8.2
+ * Forgot Password — recovery instructions.
  *
- * Provides two recovery methods:
- * 1. CLI reset via coolrouter-reset-password command
- * 2. Manual database reset instructions
+ * There is no e-mail reset: Cool Router is self-hosted, so recovery means proving you
+ * control the machine it runs on. Three ways, one per kind of install:
+ *   1. Desktop app — the tray / Help menu removes the password
+ *   2. Source / Docker — the reset-password CLI
+ *   3. Anything else — INITIAL_PASSWORD plus deleting the stored hash
  */
 
 import Link from "next/link";
-import { Card } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import CoolRouterLogo from "@/shared/components/CoolRouterLogo";
+
+function Method({
+  icon,
+  title,
+  children,
+}: {
+  icon: string;
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border bg-surface p-5">
+      <div className="flex items-start gap-3.5">
+        <span
+          className="material-symbols-outlined mt-0.5 text-[20px] text-text-main"
+          aria-hidden="true"
+        >
+          {icon}
+        </span>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold text-text-main">{title}</h2>
+          <div className="mt-1.5 space-y-2.5 text-sm leading-relaxed text-text-muted">
+            {children}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function Command({ children }: { children: React.ReactNode }) {
+  return (
+    <pre className="overflow-x-auto rounded-md border border-border bg-bg px-3 py-2 font-mono text-xs text-text-main">
+      <code>{children}</code>
+    </pre>
+  );
+}
 
 export default function ForgotPasswordPage() {
   const t = useTranslations("auth");
+
   return (
-    <div className="min-h-screen flex items-center justify-center bg-bg p-4">
-      <div className="w-full max-w-lg">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-primary mb-2">{t("resetPassword")}</h1>
-          <p className="text-text-muted">{t("resetDescription")}</p>
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-bg px-4 py-10">
+      <main id="main-content" className="w-full max-w-[520px]">
+        <div className="mb-8 flex flex-col items-center text-center">
+          <div className="mb-5 flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <CoolRouterLogo size={24} />
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-text-main">
+            {t("resetPassword")}
+          </h1>
+          <p className="mt-1.5 text-sm text-text-muted">{t("resetDescription")}</p>
         </div>
 
-        {/* Method 1: CLI Reset */}
-        <Card className="mb-4">
-          <div className="flex items-start gap-4 p-2">
-            <div className="flex items-center justify-center size-10 rounded-lg bg-primary/10 text-primary shrink-0 mt-0.5">
-              <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
-                terminal
-              </span>
-            </div>
-            <div className="flex-1">
-              <h2 className="text-lg font-semibold mb-1">{t("methodCliTitle")}</h2>
-              <p className="text-sm text-text-muted mb-3">{t("methodCliDescription")}</p>
-              <div className="bg-black/30 rounded-lg p-3 mb-3 font-mono text-sm text-green-400 border border-white/5">
-                <code>node bin/reset-password.mjs</code>
-              </div>
-              <p className="text-xs text-text-muted">{t("methodCliHint")}</p>
-            </div>
-          </div>
-        </Card>
+        <div className="flex flex-col gap-3">
+          <Method icon="desktop_windows" title={t("methodDesktopTitle")}>
+            <p>{t("methodDesktopDescription")}</p>
+          </Method>
 
-        {/* Method 2: Database Reset */}
-        <Card className="mb-6">
-          <div className="flex items-start gap-4 p-2">
-            <div className="flex items-center justify-center size-10 rounded-lg bg-amber-500/10 text-amber-500 shrink-0 mt-0.5">
-              <span className="material-symbols-outlined text-[20px]" aria-hidden="true">
-                database
-              </span>
-            </div>
-            <div className="flex-1">
-              <h2 className="text-lg font-semibold mb-1">{t("methodManualTitle")}</h2>
-              <p className="text-sm text-text-muted mb-3">{t("methodManualDescription")}</p>
-              <ol className="text-sm text-text-muted space-y-2 list-decimal list-inside mb-3">
-                <li>{t("stopServer")}</li>
-                <li>
-                  {t("setPasswordInYour")}{" "}
-                  <code className="bg-black/30 px-1 rounded text-text-main">.env</code>{" "}
-                  {t("fileLabelSuffix")}
-                  <div className="bg-black/30 rounded-lg p-2 mt-1 font-mono text-xs text-green-400 border border-white/5">
-                    INITIAL_PASSWORD={t("newPasswordPlaceholder")}
-                  </div>
-                </li>
-                <li>
-                  {t("deleteSettingsFile")}{" "}
-                  <div className="bg-black/30 rounded-lg p-2 mt-1 font-mono text-xs text-green-400 border border-white/5 break-all">
-                    sqlite3 storage.sqlite &quot;DELETE FROM key_value WHERE
-                    namespace=&apos;settings&apos; AND key=&apos;password&apos;&quot;
-                  </div>
-                </li>
-                <li>{t("restartServerWithNewPassword")}</li>
-              </ol>
-            </div>
-          </div>
-        </Card>
+          <Method icon="terminal" title={t("methodCliTitle")}>
+            <p>{t("methodCliDescription")}</p>
+            <Command>node bin/reset-password.mjs</Command>
+            <p className="text-xs">{t("methodCliHint")}</p>
+          </Method>
 
-        <div className="text-center">
+          <Method icon="database" title={t("methodManualTitle")}>
+            <p>{t("methodManualDescription")}</p>
+            <ol className="list-decimal space-y-2.5 pl-4">
+              <li>{t("stopServer")}</li>
+              <li>
+                {t("setPasswordInYour")}{" "}
+                <code className="rounded bg-bg px-1 font-mono text-xs text-text-main">.env</code>{" "}
+                {t("fileLabelSuffix")}
+                <div className="mt-1.5">
+                  <Command>INITIAL_PASSWORD={t("newPasswordPlaceholder")}</Command>
+                </div>
+              </li>
+              <li>
+                {t("deleteSettingsFile")}
+                <div className="mt-1.5">
+                  <Command>
+                    {`sqlite3 storage.sqlite "DELETE FROM key_value WHERE namespace='settings' AND key='password'"`}
+                  </Command>
+                </div>
+              </li>
+              <li>{t("restartServerWithNewPassword")}</li>
+            </ol>
+          </Method>
+        </div>
+
+        <p className="mt-6 text-center">
           <Link
             href="/login"
-            className="text-sm text-primary hover:underline inline-flex items-center gap-1"
+            className="inline-flex items-center gap-1 rounded text-sm text-text-muted transition-colors hover:text-text-main"
           >
             <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
               arrow_back
             </span>
             {t("backToLogin")}
           </Link>
-        </div>
-      </div>
+        </p>
+      </main>
     </div>
   );
 }

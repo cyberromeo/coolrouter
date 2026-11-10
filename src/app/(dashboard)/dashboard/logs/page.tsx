@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { RequestLoggerV2 } from "@/shared/components";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
+import { useNotificationStore } from "@/store/notificationStore";
 import { useTranslations } from "next-intl";
 
 const TIME_RANGES = [
@@ -16,6 +18,7 @@ export default function LogsPage() {
   const [exporting, setExporting] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const t = useTranslations("logs");
+  const notify = useNotificationStore();
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -33,7 +36,7 @@ export default function LogsPage() {
     try {
       const logType = "request-logs";
       const res = await fetch(`/api/logs/export?hours=${hours}&type=${logType}`);
-      if (!res.ok) throw new Error("Export failed");
+      if (!res.ok) throw new Error(await readApiError(res, "Export failed"));
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -45,6 +48,8 @@ export default function LogsPage() {
       URL.revokeObjectURL(url);
     } catch (err) {
       console.error("Export failed:", err);
+      // Without this the button just went back to "Export" and nothing was downloaded.
+      notify.error(err instanceof Error && err.message ? err.message : "Export failed");
     } finally {
       setExporting(false);
     }

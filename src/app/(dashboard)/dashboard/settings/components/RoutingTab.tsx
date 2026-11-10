@@ -3,16 +3,25 @@
 import { useState, useEffect } from "react";
 import { Card, Input, Button } from "@/shared/components";
 import FallbackChainsEditor from "./FallbackChainsEditor";
-import {
-  ROUTING_STRATEGIES,
-  SETTINGS_FALLBACK_STRATEGY_VALUES,
-} from "@/shared/constants/routingStrategies";
+import { ROUTING_STRATEGIES } from "@/shared/constants/routingStrategies";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import { useTranslations } from "next-intl";
 
-const STRATEGIES = ROUTING_STRATEGIES.filter((strategy) =>
-  SETTINGS_FALLBACK_STRATEGY_VALUES.includes(strategy.value)
-).map((strategy) => ({
-  value: strategy.value,
+// Account-selection strategies that PATCH /api/settings accepts
+// (updateSettingsSchema.fallbackStrategy). The other ROUTING_STRATEGIES entries are combo
+// strategies; offering them here gave cards that did nothing when clicked (HTTP 400).
+const ACCOUNT_STRATEGY_VALUES = [
+  "fill-first",
+  "round-robin",
+  "p2c",
+  "random",
+  "strict-random",
+  "least-used",
+  "cost-optimized",
+];
+
+const ALL_STRATEGIES = ROUTING_STRATEGIES.map((strategy) => ({
+  value: strategy.value as string,
   labelKey: strategy.labelKey,
   descKey: strategy.settingsDescKey,
   icon: strategy.icon,
@@ -30,6 +39,12 @@ export default function RoutingTab() {
   const [newPattern, setNewPattern] = useState("");
   const [newTarget, setNewTarget] = useState("");
   const t = useTranslations("settings");
+  // Keep showing a strategy saved by an older version even if it can no longer be picked.
+  const STRATEGIES = ALL_STRATEGIES.filter(
+    (strategy) =>
+      ACCOUNT_STRATEGY_VALUES.includes(strategy.value) ||
+      strategy.value === settings.fallbackStrategy
+  );
   const strategyHintKeyByValue = STRATEGIES.reduce<Record<string, string>>((acc, strategy) => {
     acc[strategy.value] = strategy.descKey;
     return acc;
@@ -37,9 +52,18 @@ export default function RoutingTab() {
 
   useEffect(() => {
     fetch("/api/settings")
-      .then((res) => res.json())
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP error ${res.status}`);
+        return res.json();
+      })
       .then((data) => {
-        setSettings(data);
+        // Merge over the defaults: a fresh install has no fallbackStrategy stored yet, and
+        // replacing the state left no strategy highlighted (the server default is fill-first).
+        setSettings((prev) => ({
+          ...prev,
+          ...data,
+          fallbackStrategy: data.fallbackStrategy || prev.fallbackStrategy,
+        }));
         setAliases(data.wildcardAliases || []);
         setLoading(false);
       })
@@ -188,7 +212,9 @@ export default function RoutingTab() {
         </div>
       </Card>
 
-      {/* LKGP Toggle */}
+      {/* LKGP — no on/off switch here: `lkgpEnabled` is not a setting the API stores
+          (updateSettingsSchema drops it) and nothing in the router reads it, so the switch
+          looked saved but reset on reload and changed nothing. LKGP is chosen per combo. */}
       <Card>
         <div className="flex items-start justify-between gap-4">
           <div className="flex gap-3">
@@ -207,18 +233,6 @@ export default function RoutingTab() {
               </p>
             </div>
           </div>
-          <div className="pt-1">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={settings.lkgpEnabled !== false}
-                onChange={(e) => updateSetting({ lkgpEnabled: e.target.checked })}
-                disabled={loading}
-              />
-              <div className="w-11 h-6 bg-border peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-accent"></div>
-            </label>
-          </div>
         </div>
         <div className="mt-3 pt-3 border-t border-border/30 flex items-center gap-2">
           <Button
@@ -230,7 +244,7 @@ export default function RoutingTab() {
               setLkgpCacheStatus({ type: "", message: "" });
               try {
                 const res = await fetch("/api/settings/lkgp-cache", { method: "DELETE" });
-                const data = await res.json();
+                const data = await res.json().catch(() => null);
                 if (res.ok) {
                   setLkgpCacheStatus({
                     type: "success",
@@ -239,8 +253,7 @@ export default function RoutingTab() {
                 } else {
                   setLkgpCacheStatus({
                     type: "error",
-                    message:
-                      data.error || t("lkgpCacheClearFailed") || "Failed to clear LKGP cache",
+                    message: getApiErrorMessage(data, t("lkgpCacheClearFailed")),
                   });
                 }
               } catch {

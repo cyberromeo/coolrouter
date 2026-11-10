@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Card, Button, Input, Toggle } from "@/shared/components";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
-import IPFilterSection from "./IPFilterSection";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import SessionInfoCard from "./SessionInfoCard";
 import { useTranslations } from "next-intl";
 
@@ -82,12 +82,18 @@ export default function SecurityTab() {
           newPassword: passwords.new,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (res.ok) {
         setPassStatus({ type: "success", message: t("passwordUpdated") });
         setPasswords({ current: "", new: "", confirm: "" });
+        // A password now exists: the form must ask for the current one next time.
+        setSettings((prev) => ({ ...prev, hasPassword: true }));
       } else {
-        setPassStatus({ type: "error", message: data.error || t("failedUpdatePassword") });
+        // data.error is an object for validation failures; rendering it crashes the tab.
+        setPassStatus({
+          type: "error",
+          message: getApiErrorMessage(data, t("failedUpdatePassword")),
+        });
       }
     } catch {
       setPassStatus({ type: "error", message: t("errorOccurred") });
@@ -249,7 +255,10 @@ export default function SecurityTab() {
       </Card>
 
       <SessionInfoCard />
-      <IPFilterSection />
+      {/* IPFilterSection is deliberately not rendered: nothing calls checkIP() and the
+          lists are not persisted, so the allow/block rules had no effect. A security
+          control that does nothing is worse than none — it comes back once the proxy
+          enforces it. */}
     </div>
   );
 }

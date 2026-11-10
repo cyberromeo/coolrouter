@@ -3,9 +3,15 @@ name: Release
 # Builds and signs every Cool Router artifact when a version tag is pushed:
 #   git tag v0.1.0 && git push origin v0.1.0
 #
+# Run it by hand (Actions → Release → Run workflow) for a dry run: everything is built
+# and smoke-tested, nothing is pushed or published.
+#
 # Docker image  -> ghcr.io/cyberromeo/cool-router (ghcr.io/<owner>/cool-router), signed with Sigstore cosign (keyless) + SBOM/provenance
 # Linux         -> AppImage + .deb, signed with cosign sign-blob (keyless)
-# macOS         -> .dmg (arm64 + x64), Developer ID signed + notarized when Apple secrets are set
+# macOS         -> .dmg (arm64 + x64). Developer ID signed + notarized when Apple secrets
+#                  are set; otherwise ad-hoc signed (electron/scripts/after-pack.js) so
+#                  macOS shows the normal "unverified developer" prompt instead of
+#                  refusing the app as "damaged".
 # Windows       -> .exe (NSIS), Authenticode signed when WIN_CSC_LINK / WIN_CSC_KEY_PASSWORD are set
 # Every file gets a SHA256SUMS entry, and SHA256SUMS itself is signed.
 # latest.yml / latest-linux.yml (+ the .exe blockmap) feed the desktop app's electron-updater.
@@ -28,6 +34,8 @@ permissions:
 
 env:
   NODE_VERSION: "22"
+  # Only a version tag publishes. A manual run is a dry run.
+  PUBLISH: ${{ startsWith(github.ref, 'refs/tags/v') }}
 
 jobs:
   docker:
@@ -38,7 +46,9 @@ jobs:
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: sigstore/cosign-installer@v3
+        if: env.PUBLISH == 'true'
       - uses: docker/login-action@v3
+        if: env.PUBLISH == 'true'
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -50,19 +60,22 @@ jobs:
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ env.PUBLISH == 'true' }}
+            type=raw,value=dry-run,enable=${{ env.PUBLISH != 'true' }}
       - id: build
         uses: docker/build-push-action@v6
         with:
           context: .
           target: runner-base
-          platforms: linux/amd64,linux/arm64
-          push: true
+          # A dry run only proves the image builds; skip the slow emulated arm64 build.
+          platforms: ${{ env.PUBLISH == 'true' && 'linux/amd64,linux/arm64' || 'linux/amd64' }}
+          push: ${{ env.PUBLISH == 'true' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          sbom: true
-          provenance: mode=max
+          sbom: ${{ env.PUBLISH == 'true' }}
+          provenance: ${{ env.PUBLISH == 'true' && 'mode=max' || 'false' }}
       - name: Sign image (keyless)
+        if: env.PUBLISH == 'true'
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
@@ -118,14 +131,30 @@ jobs:
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -z "$CSC_LINK" ]; then
-            echo "::warning::No Apple Developer ID secrets: building an unsigned .dmg"
+            echo "::notice::No Apple Developer ID secrets: building an ad-hoc signed .dmg (users approve it once under Privacy & Security)"
             export CSC_IDENTITY_AUTO_DISCOVERY=false
+            # identity=null stops electron-builder from signing; the afterPack hook
+            # (electron/scripts/after-pack.js) then ad-hoc signs the bundle.
             npx electron-builder --mac --publish never -c.mac.identity=null
           elif [ -n "$APPLE_ID" ]; then
             npx electron-builder --mac --publish never -c.mac.notarize=true
           else
             npx electron-builder --mac --publish never
           fi
+
+      - name: Verify macOS code signature
+        if: matrix.target == 'mac'
+        working-directory: electron
+        run: |
+          # An unsigned or broken bundle is what macOS reports as "damaged" on Apple
+          # Silicon, so fail the build rather than ship one.
+          app="$(find dist-electron -maxdepth 2 -name 'Cool Router.app' -print -quit)"
+          test -n "$app" || { echo "::error::Cool Router.app not found"; exit 1; }
+          codesign --verify --deep --strict --verbose=2 "$app"
+          codesign --display --verbose=2 "$app" 2>&1 | grep -E "Identifier|Signature|TeamIdentifier|Authority" || true
+          for bin in "$app/Contents/Resources/node/node" "$app/Contents/Resources/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node"; do
+            codesign --verify --strict "$bin"
+          done
 
       - name: Build Windows
         if: matrix.target == 'win'
@@ -136,12 +165,21 @@ jobs:
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
         run: |
           if [ -z "$WIN_CSC_LINK" ]; then
-            echo "::warning::No Windows signing secrets: building an unsigned .exe"
+            echo "::notice::No Windows signing secrets: building an unsigned .exe"
             export CSC_IDENTITY_AUTO_DISCOVERY=false
           else
             export CSC_LINK="$WIN_CSC_LINK" CSC_KEY_PASSWORD="$WIN_CSC_KEY_PASSWORD"
           fi
           npx electron-builder --win --publish never
+
+      # Launch the packaged app: server starts, first-run password flow works, the auth
+      # gate holds, and the server stops when the app is killed.
+      - name: Smoke test (Linux)
+        if: matrix.target == 'linux'
+        run: xvfb-run -a node scripts/desktop-smoke-test.mjs
+      - name: Smoke test (macOS, Windows)
+        if: matrix.target != 'linux'
+        run: node scripts/desktop-smoke-test.mjs
 
       - uses: actions/upload-artifact@v4
         with:
@@ -153,11 +191,13 @@ jobs:
             electron/dist-electron/*.dmg
             electron/dist-electron/*.exe
             electron/dist-electron/*.exe.blockmap
-            electron/dist-electron/latest*.yml
+            electron/dist-electron/latest.yml
+            electron/dist-electron/latest-linux.yml
 
   release:
     name: Publish release
     needs: [docker, desktop]
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -177,9 +217,11 @@ jobs:
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: "dist/*"
+      - name: Release notes
+        run: node scripts/release-notes.mjs "${GITHUB_REF_NAME}" > release-notes.md
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
           name: Cool Router ${{ github.ref_name }}
-          generate_release_notes: true
+          body_path: release-notes.md
           files: dist/*

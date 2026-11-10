@@ -53,9 +53,22 @@ export async function POST(request) {
   const authError = await requireManagementAuth(request);
   if (authError) return authError;
 
+  let body;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
 
+  try {
     // Zod validation
     const validation = validateBody(createKeySchema, body);
     if (isValidationFailure(validation)) {

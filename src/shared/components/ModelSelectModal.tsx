@@ -291,6 +291,7 @@ export default function ModelSelectModal({
           <input
             type="text"
             placeholder="Search..."
+            aria-label="Search models"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             className="w-full pl-8 pr-3 py-1.5 bg-surface border border-border rounded text-xs focus:outline-none focus:ring-1 focus:ring-primary/50"
@@ -350,7 +351,8 @@ export default function ModelSelectModal({
                 const isAdded = addedModelValues.includes(model.value);
                 return (
                   <button
-                    key={model.id}
+                    // Two aliases can point at the same model id; the alias name tells them apart.
+                    key={`${model.value}::${model.name}`}
                     onClick={() => handleSelect(model)}
                     className={`
                       px-2 py-1 rounded-xl text-xs font-medium transition-all border hover:cursor-pointer

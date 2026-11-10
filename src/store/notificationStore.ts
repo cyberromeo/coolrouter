@@ -10,8 +10,23 @@
  */
 
 import { create } from "zustand";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 let idCounter = 0;
+
+/**
+ * Toasts render `message` as a React child. Callers often pass an API payload's `error`
+ * straight through, and that can be an object ({ message, details } from validation,
+ * { code, message } from the auth gate) — rendering it crashes the whole dashboard.
+ * Always store a string.
+ */
+function toMessageText(message: unknown): string {
+  if (typeof message === "string") return message;
+  if (message instanceof Error) return message.message;
+  if (message === null || message === undefined) return "";
+  if (typeof message === "object") return getApiErrorMessage({ error: message });
+  return String(message);
+}
 
 type NotificationType = "success" | "error" | "warning" | "info";
 
@@ -50,7 +65,7 @@ export const useNotificationStore = create<NotificationStore>((set, get) => ({
     const entry: Notification = {
       id,
       type: notification.type || "info",
-      message: notification.message,
+      message: toMessageText(notification.message),
       title: notification.title || null,
       duration: notification.duration ?? 5000,
       dismissible: notification.dismissible ?? true,

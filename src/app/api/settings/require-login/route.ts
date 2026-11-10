@@ -3,12 +3,21 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import bcrypt from "bcryptjs";
 import { updateRequireLoginSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { isAuthenticated } from "@/shared/utils/apiAuth";
+import {
+  AUTH_COOKIE_NAME,
+  createSessionToken,
+  getSessionCookieOptions,
+  getSessionSecret,
+  hasValidSessionCookie,
+} from "@/shared/utils/authSession";
 
-// Node.js compatibility check — better-sqlite3 requires Node <24
+// Node.js compatibility. If this handler is answering at all, the native SQLite module
+// loaded, so the only thing left to flag is a runtime older than Next.js itself supports.
 function getNodeCompatibility() {
   const nodeVersion = process.version;
   const major = parseInt(nodeVersion.replace("v", "").split(".")[0], 10);
-  return { nodeVersion, nodeCompatible: major >= 18 && major < 24 };
+  return { nodeVersion, nodeCompatible: Number.isFinite(major) ? major >= 20 : true };
 }
 
 export async function GET() {
@@ -37,9 +46,22 @@ export async function GET() {
   }
 }
 
+async function callerIsSignedIn(request: Request): Promise<boolean> {
+  if (await isAuthenticated(request)) return true;
+  return hasValidSessionCookie(request.headers.get("cookie"));
+}
+
 /**
- * POST /api/settings/require-login — Set password and/or toggle requireLogin.
- * Used by the onboarding wizard security step.
+ * POST /api/settings/require-login — security step of the first-run setup wizard.
+ *
+ * This route is on the public allowlist (the wizard runs before any password exists),
+ * so it polices itself:
+ *   - No password yet: anyone may set the first password or turn login off. Setting a
+ *     password also signs the caller in (session cookie); without that, every request
+ *     the wizard makes afterwards is rejected as unauthenticated.
+ *   - A password already exists: the caller must be signed in, and the password cannot
+ *     be replaced here — that goes through Settings → Security, which asks for the
+ *     current one. Otherwise anyone who can reach the port could reset it.
  */
 export async function POST(request: Request) {
   let rawBody;
@@ -62,22 +84,46 @@ export async function POST(request: Request) {
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const body = validation.data;
-    const { requireLogin, password } = body;
+    const { requireLogin, password } = validation.data;
 
-    const updates: Record<string, any> = {};
+    const settings = await getSettings();
+    const hasPassword = !!settings.password || !!process.env.INITIAL_PASSWORD;
+
+    if (hasPassword) {
+      if (!(await callerIsSignedIn(request))) {
+        return NextResponse.json({ error: "Authentication required" }, { status: 401 });
+      }
+      if (password) {
+        return NextResponse.json(
+          { error: "A password is already set. Change it in Settings → Security." },
+          { status: 409 }
+        );
+      }
+    }
+
+    const updates: Record<string, unknown> = {};
 
     if (typeof requireLogin === "boolean") {
       updates.requireLogin = requireLogin;
     }
 
     if (password) {
-      const hashedPassword = await bcrypt.hash(password, 12);
-      updates.password = hashedPassword;
+      updates.password = await bcrypt.hash(password, 12);
+      // A password only protects anything while login is on.
+      if (typeof requireLogin !== "boolean") updates.requireLogin = true;
     }
 
     await updateSettings(updates);
-    return NextResponse.json({ success: true });
+
+    const response = NextResponse.json({ success: true });
+    if (password && getSessionSecret()) {
+      response.cookies.set(
+        AUTH_COOKIE_NAME,
+        await createSessionToken(),
+        getSessionCookieOptions(request)
+      );
+    }
+    return response;
   } catch (error) {
     console.error("[API] Error updating require-login settings:", error);
     return NextResponse.json(

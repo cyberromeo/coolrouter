@@ -13,6 +13,7 @@
 import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { useUpdateStatus } from "@/shared/hooks/useUpdateStatus";
+import { copyToClipboard } from "@/shared/utils/clipboard";
 
 const DISMISS_KEY = "coolrouter-update-dismissed";
 
@@ -71,12 +72,12 @@ export default function UpdateBanner() {
   const command = server?.upgradeCommand || null;
   const copyCommand = async () => {
     if (!command) return;
-    try {
-      await navigator.clipboard.writeText(command);
+    // navigator.clipboard only exists on https/localhost. A Docker or source install opened
+    // as http://192.168.x.x:20128 — exactly who gets this command — has none, so the shared
+    // helper falls back to execCommand there.
+    if (await copyToClipboard(command)) {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
-    } catch {
-      /* clipboard blocked */
     }
   };
 
@@ -148,10 +149,12 @@ export default function UpdateBanner() {
           <button
             type="button"
             onClick={dismiss}
-            className="p-1 rounded hover:bg-white/5 text-text-muted hover:text-text-main transition-colors"
+            className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 text-text-muted hover:text-text-main transition-colors"
             aria-label={t("dismiss")}
           >
-            <span className="material-symbols-outlined text-[16px]">close</span>
+            <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+              close
+            </span>
           </button>
         )}
       </div>

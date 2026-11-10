@@ -65,6 +65,21 @@ test("isPublicRoute recognizes allowed API prefixes", () => {
   assert.equal(apiAuth.isPublicRoute("/api/settings"), false);
 });
 
+test("isPublicRoute lets API-key clients reach the Gemini and Ollama surfaces", () => {
+  // These clients send an API key (or nothing), never the dashboard session cookie, so
+  // the dashboard password must not lock them out.
+  assert.equal(apiAuth.isPublicRoute("/api/v1beta/models"), true);
+  assert.equal(apiAuth.isPublicRoute("/api/v1beta/models/gemini-pro:generateContent"), true);
+  assert.equal(apiAuth.isPublicRoute("/api/tags"), true);
+  assert.equal(apiAuth.isPublicRoute("/api/v1"), true);
+  // Management routes that merely share a prefix stay protected.
+  assert.equal(apiAuth.isPublicRoute("/api/settings/require-login-other"), false);
+  assert.equal(apiAuth.isPublicRoute("/api/tagsmith"), false);
+  assert.equal(apiAuth.isPublicRoute("/api/v10/anything"), false);
+  assert.equal(apiAuth.isPublicRoute("/api/providers"), false);
+  assert.equal(apiAuth.isPublicRoute("/api/keys"), false);
+});
+
 test("verifyAuth accepts a valid JWT session cookie", async () => {
   process.env.JWT_SECRET = "jwt-secret-for-tests";
   const secret = new TextEncoder().encode(process.env.JWT_SECRET);

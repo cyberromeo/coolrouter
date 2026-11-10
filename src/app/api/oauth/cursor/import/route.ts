@@ -6,6 +6,7 @@ import { syncToCloud } from "@/lib/cloudSync";
 import { cursorImportSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { runWithProxyContext } from "@coolrouter/open-sse/utils/proxyFetch.ts";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 /**
  * POST /api/oauth/cursor/import
@@ -16,6 +17,11 @@ import { runWithProxyContext } from "@coolrouter/open-sse/utils/proxyFetch.ts";
  * - machineId: string - Machine ID from storage.serviceMachineId
  */
 export async function POST(request: any) {
+  // The whole /api/oauth/ prefix is on the proxy's public allowlist, so this handler has to
+  // authenticate by itself: it is only ever called by the signed-in dashboard.
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   let rawBody;
   try {
     rawBody = await request.json();
@@ -89,7 +95,10 @@ export async function POST(request: any) {
  * GET /api/oauth/cursor/import
  * Get instructions for importing Cursor token
  */
-export async function GET() {
+export async function GET(request: Request) {
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   const cursorService = new CursorService();
   const instructions = cursorService.getTokenStorageInstructions();
 

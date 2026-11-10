@@ -2,8 +2,10 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Card from "./Card";
-import RequestLoggerDetail from "./RequestLoggerDetail";
+import RequestLoggerDetail, { isReroutedModel } from "./RequestLoggerDetail";
 import { copyToClipboard } from "@/shared/utils/clipboard";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
+import { useNotificationStore } from "@/store/notificationStore";
 import {
   PROTOCOL_COLORS,
   PROVIDER_COLORS,
@@ -75,6 +77,20 @@ function getProviderDisplayLabel(provider: string, providerNodes?: any[]): strin
   return null; // Not a compatible provider, use default PROVIDER_COLORS
 }
 
+/**
+ * The pipeline records the requested model with the provider's internal id. For a custom
+ * compatible provider that id is "openai-compatible-chat-<uuid>", which turns the column
+ * into four wrapped lines of noise. Show the prefix the user actually types ("mock/…").
+ */
+function formatRequestedModel(requested: string, providerNodes?: any[]): string {
+  const slash = requested.indexOf("/");
+  if (slash <= 0) return requested;
+  const providerId = requested.slice(0, slash);
+  if (!/^(openai|anthropic)-compatible-/.test(providerId)) return requested;
+  const node = providerNodes?.find((candidate) => candidate.id === providerId);
+  return `${node?.prefix || "custom"}${requested.slice(slash)}`;
+}
+
 function getLogTotalTokens(log) {
   return (log?.tokens?.in || 0) + (log?.tokens?.out || 0);
 }
@@ -97,18 +113,24 @@ export default function RequestLoggerV2() {
   const [detailLoggingLoading, setDetailLoggingLoading] = useState(false);
   const intervalRef = useRef(null);
   const hasLoadedRef = useRef(false);
+  const latestQueryRef = useRef("");
+  const detailRequestRef = useRef(null);
   const [providerNodes, setProviderNodes] = useState([]);
+  const notify = useNotificationStore();
 
-  // Column visibility with localStorage persistence
-  const [visibleColumns, setVisibleColumns] = useState(() => {
-    if (typeof window === "undefined") return DEFAULT_VISIBLE;
+  // Column visibility with localStorage persistence. The saved choice is applied after
+  // mount: reading localStorage during the first render made the client markup differ
+  // from the server's, and React kept the server's "every column on" button styles for
+  // columns that were actually hidden.
+  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE);
+  useEffect(() => {
     try {
       const saved = localStorage.getItem("loggerVisibleColumns");
-      return saved ? { ...DEFAULT_VISIBLE, ...JSON.parse(saved) } : DEFAULT_VISIBLE;
+      if (saved) setVisibleColumns({ ...DEFAULT_VISIBLE, ...JSON.parse(saved) });
     } catch {
-      return DEFAULT_VISIBLE;
+      /* storage unavailable or corrupt */
     }
-  });
+  }, []);
 
   const toggleColumn = useCallback((key) => {
     setVisibleColumns((prev) => {
@@ -135,10 +157,14 @@ export default function RequestLoggerV2() {
         if (selectedApiKey) params.set("apiKey", selectedApiKey);
         params.set("limit", "300");
 
-        const res = await fetch(`/api/usage/call-logs?${params}`);
+        const query = params.toString();
+        latestQueryRef.current = query;
+        const res = await fetch(`/api/usage/call-logs?${query}`);
         if (res.ok) {
           const data = await res.json();
-          setLogs(data);
+          // A slower answer for an earlier search text / filter must not replace the list
+          // for the current one.
+          if (latestQueryRef.current === query && Array.isArray(data)) setLogs(data);
         }
       } catch (error) {
         console.error("Failed to fetch call logs:", error);
@@ -180,7 +206,11 @@ export default function RequestLoggerV2() {
   useEffect(() => {
     if (intervalRef.current) clearInterval(intervalRef.current);
     if (recording) {
-      intervalRef.current = setInterval(() => fetchLogs(false), 3000);
+      intervalRef.current = setInterval(() => {
+        // No point fetching 300 rows every 3s for a tab nobody is looking at.
+        if (document.hidden) return;
+        fetchLogs(false);
+      }, 3000);
     }
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -188,9 +218,22 @@ export default function RequestLoggerV2() {
   }, [recording, fetchLogs]);
 
   const filteredLogs = useMemo(() => {
-    if (activeFilter === "combo") return logs.filter((l) => l.comboName);
-    return logs;
-  }, [activeFilter, logs]);
+    // The API matches these as substrings ("openai" also returns "openai-compatible-…",
+    // "gpt-4o" also returns "gpt-4o-mini"). A value picked from a dropdown means exactly
+    // that value.
+    return logs.filter((l) => {
+      if (activeFilter === "combo" && !l.comboName) return false;
+      if (selectedProvider && l.provider !== selectedProvider) return false;
+      if (selectedModel && l.model !== selectedModel && l.requestedModel !== selectedModel) {
+        return false;
+      }
+      if (selectedAccount && l.account !== selectedAccount) return false;
+      if (selectedApiKey && l.apiKeyId !== selectedApiKey && l.apiKeyName !== selectedApiKey) {
+        return false;
+      }
+      return true;
+    });
+  }, [activeFilter, logs, selectedProvider, selectedModel, selectedAccount, selectedApiKey]);
 
   const sortedLogs = useMemo(() => {
     const arr = [...filteredLogs];
@@ -226,23 +269,27 @@ export default function RequestLoggerV2() {
 
   // Fetch log detail
   const openDetail = async (logEntry) => {
+    detailRequestRef.current = logEntry.id;
     setSelectedLog(logEntry);
     setDetailLoading(true);
     setDetailData(null);
     try {
-      const res = await fetch(`/api/usage/call-logs/${logEntry.id}`);
+      const res = await fetch(`/api/usage/call-logs/${encodeURIComponent(logEntry.id)}`);
       if (res.ok) {
         const data = await res.json();
-        setDetailData(data);
+        // Ignore the answer if the dialog was closed or another row was opened meanwhile —
+        // otherwise row B's dialog shows row A's payloads.
+        if (detailRequestRef.current === logEntry.id) setDetailData(data);
       }
     } catch (error) {
       console.error("Failed to fetch log detail:", error);
     } finally {
-      setDetailLoading(false);
+      if (detailRequestRef.current === logEntry.id) setDetailLoading(false);
     }
   };
 
   const closeDetail = () => {
+    detailRequestRef.current = null;
     setSelectedLog(null);
     setDetailData(null);
   };
@@ -256,27 +303,57 @@ export default function RequestLoggerV2() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled: nextEnabled }),
       });
-      if (!res.ok) throw new Error("Failed to update pipeline logging");
+      if (!res.ok) throw new Error(await readApiError(res, "Failed to update pipeline logging"));
       setDetailLoggingEnabled(nextEnabled);
     } catch (error) {
       console.error("Failed to toggle pipeline logging:", error);
+      // Without this the button just snapped back and nothing told the user why.
+      notify.error(
+        error instanceof Error && error.message
+          ? error.message
+          : "Failed to update pipeline logging"
+      );
     } finally {
       setDetailLoggingLoading(false);
     }
   };
 
-  // Unique accounts and providers for dropdowns
-
-  const uniqueAccounts = [...new Set(logs.map((l) => l.account).filter((a) => a && a !== "-"))];
+  // Unique accounts and providers for dropdowns. The selected value is always kept in its
+  // list: when a filter combination matches nothing, a <select> whose value has no option
+  // falls back to showing "All …" while the filter is in fact still applied.
+  const uniqueAccounts = [
+    ...new Set([...logs.map((l) => l.account), selectedAccount].filter((a) => a && a !== "-")),
+  ];
   const uniqueModels = [
-    ...new Set(logs.flatMap((l) => [l.model, l.requestedModel]).filter((value) => Boolean(value))),
+    ...new Set(
+      [...logs.flatMap((l) => [l.model, l.requestedModel]), selectedModel].filter((value) =>
+        Boolean(value)
+      )
+    ),
   ].sort();
   const uniqueProviders = [
-    ...new Set(logs.map((l) => l.provider).filter((p) => p && p !== "-")),
+    ...new Set([...logs.map((l) => l.provider), selectedProvider].filter((p) => p && p !== "-")),
   ].sort();
   const uniqueApiKeys = [
-    ...new Set(logs.map((l) => l.apiKeyId || l.apiKeyName).filter(Boolean)),
+    ...new Set([...logs.map((l) => l.apiKeyId || l.apiKeyName), selectedApiKey].filter(Boolean)),
   ].sort();
+
+  const hasActiveFilters = Boolean(
+    search ||
+    activeFilter !== "all" ||
+    selectedModel ||
+    selectedProvider ||
+    selectedAccount ||
+    selectedApiKey
+  );
+  const clearFilters = () => {
+    setSearch("");
+    setActiveFilter("all");
+    setSelectedModel("");
+    setSelectedProvider("");
+    setSelectedAccount("");
+    setSelectedApiKey("");
+  };
 
   // Stats
   const totalCount = filteredLogs.length;
@@ -393,7 +470,7 @@ export default function RequestLoggerV2() {
           <option value="">All API Keys</option>
           {uniqueApiKeys.map((value) => {
             const matched = logs.find((l) => (l.apiKeyId || l.apiKeyName) === value);
-            const label = formatApiKeyLabel(matched?.apiKeyName, matched?.apiKeyId);
+            const label = matched ? formatApiKeyLabel(matched.apiKeyName, matched.apiKeyId) : value;
             return (
               <option key={value} value={value}>
                 {label}
@@ -454,6 +531,7 @@ export default function RequestLoggerV2() {
           onClick={() => fetchLogs(false)}
           className="p-2 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-text-primary transition-colors"
           title="Refresh"
+          aria-label="Refresh"
         >
           <span className="material-symbols-outlined text-[18px]">refresh</span>
         </button>
@@ -539,7 +617,7 @@ export default function RequestLoggerV2() {
         <div className="p-0 overflow-x-auto max-h-[calc(100vh-320px)] overflow-y-auto">
           {loading && logs.length === 0 ? (
             <div className="p-8 text-center text-text-muted">Loading logs...</div>
-          ) : logs.length === 0 ? (
+          ) : logs.length === 0 && !hasActiveFilters ? (
             <div className="p-8 text-center text-text-muted">
               <span className="material-symbols-outlined text-[48px] mb-2 block opacity-40">
                 receipt_long
@@ -548,7 +626,14 @@ export default function RequestLoggerV2() {
             </div>
           ) : sortedLogs.length === 0 ? (
             <div className="p-8 text-center text-text-muted">
-              No logs match the current filters.
+              <p>No logs match the current filters.</p>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="mt-3 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-text-main hover:bg-bg-subtle transition-colors"
+              >
+                Clear filters
+              </button>
             </div>
           ) : (
             <table className="w-full text-left border-collapse text-xs">
@@ -635,12 +720,22 @@ export default function RequestLoggerV2() {
                   };
                   const providerLabel = compatLabel || providerColor.label;
                   const isError = log.status >= 400;
+                  const rerouted = isReroutedModel(log.requestedModel, log.model);
 
                   return (
                     <tr
                       key={log.id}
                       onClick={() => openDetail(log)}
-                      className={`cursor-pointer hover:bg-primary/5 transition-colors ${isError ? "bg-red-500/5" : ""}`}
+                      onKeyDown={(e) => {
+                        if (e.target !== e.currentTarget) return;
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          openDetail(log);
+                        }
+                      }}
+                      tabIndex={0}
+                      aria-label={`Open details for ${log.model || "request"}, status ${log.status || "pending"}`}
+                      className={`cursor-pointer hover:bg-primary/5 focus-visible:bg-primary/10 transition-colors ${isError ? "bg-red-500/5" : ""}`}
                     >
                       {visibleColumns.status && (
                         <td className="px-3 py-2">
@@ -662,17 +757,15 @@ export default function RequestLoggerV2() {
                           {log.requestedModel ? (
                             <span
                               className={
-                                log.requestedModel !== log.model
-                                  ? "text-amber-600 dark:text-amber-400"
-                                  : "text-text-muted"
+                                rerouted ? "text-amber-600 dark:text-amber-400" : "text-text-muted"
                               }
                               title={
-                                log.requestedModel !== log.model
+                                rerouted
                                   ? `Requested ${log.requestedModel}, routed as ${log.model}`
                                   : log.requestedModel
                               }
                             >
-                              {log.requestedModel}
+                              {formatRequestedModel(log.requestedModel, providerNodes)}
                             </span>
                           ) : (
                             <span className="text-text-muted text-[10px]">—</span>

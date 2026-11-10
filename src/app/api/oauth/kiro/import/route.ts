@@ -6,12 +6,18 @@ import { syncToCloud } from "@/lib/cloudSync";
 import { kiroImportSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { runWithProxyContext } from "@coolrouter/open-sse/utils/proxyFetch.ts";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 /**
  * POST /api/oauth/kiro/import
  * Import and validate refresh token from Kiro IDE
  */
 export async function POST(request: any) {
+  // The whole /api/oauth/ prefix is on the proxy's public allowlist, so this handler has to
+  // authenticate by itself: it is only ever called by the signed-in dashboard.
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   let rawBody;
   try {
     rawBody = await request.json();

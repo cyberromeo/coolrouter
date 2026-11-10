@@ -23,6 +23,7 @@ import {
 } from "@/shared/constants/providers";
 import Link from "next/link";
 import { getErrorCode, getRelativeTime } from "@/shared/utils";
+import { getApiErrorMessage, readApiError } from "@/shared/utils/apiErrorMessage";
 import { useNotificationStore } from "@/store/notificationStore";
 import ModelAvailabilityBadge from "./components/ModelAvailabilityBadge";
 import { useTranslations } from "next-intl";
@@ -202,7 +203,7 @@ export default function ProvidersPage() {
           notify.info("No supported OAuth credentials found in Zed IDE.");
         }
       } else {
-        notify.error(data.error || "Failed to import from Zed IDE.");
+        notify.error(getApiErrorMessage(data, "Failed to import from Zed IDE."));
       }
     } catch (error) {
       notify.error("Network error while trying to import from Zed.");
@@ -222,7 +223,7 @@ export default function ProvidersPage() {
       });
       const data = await res.json();
       if (!res.ok) {
-        throw new Error(data.error || t("repairEnvFailed"));
+        throw new Error(getApiErrorMessage(data, t("repairEnvFailed")));
       }
       notify.success(
         data.backupPath ? `${t("repairEnvSuccess")} (${data.backupPath})` : t("repairEnvSuccess")
@@ -254,9 +255,18 @@ export default function ProvidersPage() {
       return status === "active" || status === "success";
     }).length;
 
+    // "banned" and "credits_exhausted" are written by the router (403 / out of credits).
+    // Leaving them out made a provider whose only account was banned read "No connections".
     const errorConns = providerConnections.filter((c) => {
       const status = getEffectiveStatus(c);
-      return status === "error" || status === "expired" || status === "unavailable";
+      return (
+        status === "error" ||
+        status === "expired" ||
+        status === "unavailable" ||
+        status === "failed" ||
+        status === "banned" ||
+        status === "credits_exhausted"
+      );
     });
 
     const error = errorConns.length;
@@ -1001,23 +1011,26 @@ function AddOpenAICompatibleModal({ isOpen, onClose, onCreated }) {
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<"success" | "failed" | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   const apiTypeOptions = [
     { value: "chat", label: t("chatCompletions") },
     { value: "responses", label: t("responsesApi") },
   ];
 
+  // Both API types share the same default base URL, so switching the type must not
+  // overwrite a base URL the user already typed. Only clear transient feedback on open.
   useEffect(() => {
-    const defaultBaseUrl = "https://api.openai.com/v1";
-    setFormData((prev) => ({
-      ...prev,
-      baseUrl: defaultBaseUrl,
-    }));
-  }, [formData.apiType]);
+    if (isOpen) {
+      setValidationResult(null);
+      setSubmitError("");
+    }
+  }, [isOpen]);
 
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSubmitting(true);
+    setSubmitError("");
     try {
       const res = await fetch("/api/provider-nodes", {
         method: "POST",
@@ -1032,23 +1045,26 @@ function AddOpenAICompatibleModal({ isOpen, onClose, onCreated }) {
           modelsPath: formData.modelsPath || "",
         }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        onCreated(data.node);
-        setFormData({
-          name: "",
-          prefix: "",
-          apiType: "chat",
-          baseUrl: "https://api.openai.com/v1",
-          chatPath: "",
-          modelsPath: "",
-        });
-        setCheckKey("");
-        setValidationResult(null);
-        setShowAdvanced(false);
+      if (!res.ok) {
+        setSubmitError(await readApiError(res, t("failedCreate")));
+        return;
       }
+      const data = await res.json();
+      onCreated(data.node);
+      setFormData({
+        name: "",
+        prefix: "",
+        apiType: "chat",
+        baseUrl: "https://api.openai.com/v1",
+        chatPath: "",
+        modelsPath: "",
+      });
+      setCheckKey("");
+      setValidationResult(null);
+      setShowAdvanced(false);
     } catch (error) {
       console.log("Error creating OpenAI Compatible node:", error);
+      setSubmitError(t("errorOccurred"));
     } finally {
       setSubmitting(false);
     }
@@ -1162,6 +1178,11 @@ function AddOpenAICompatibleModal({ isOpen, onClose, onCreated }) {
             {validationResult === "success" ? t("valid") : t("invalid")}
           </Badge>
         )}
+        {submitError && (
+          <p className="text-sm text-red-500" role="alert">
+            {submitError}
+          </p>
+        )}
         <div className="flex gap-2">
           <Button
             onClick={handleSubmit}
@@ -1204,18 +1225,21 @@ function AddAnthropicCompatibleModal({ isOpen, onClose, onCreated }) {
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<"success" | "failed" | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     // Reset validation when modal opens
     if (isOpen) {
       setValidationResult(null);
       setCheckKey("");
+      setSubmitError("");
     }
   }, [isOpen]);
 
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSubmitting(true);
+    setSubmitError("");
     try {
       const res = await fetch("/api/provider-nodes", {
         method: "POST",
@@ -1229,22 +1253,25 @@ function AddAnthropicCompatibleModal({ isOpen, onClose, onCreated }) {
           modelsPath: formData.modelsPath || "",
         }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        onCreated(data.node);
-        setFormData({
-          name: "",
-          prefix: "",
-          baseUrl: "https://api.anthropic.com/v1",
-          chatPath: "",
-          modelsPath: "",
-        });
-        setCheckKey("");
-        setValidationResult(null);
-        setShowAdvanced(false);
+      if (!res.ok) {
+        setSubmitError(await readApiError(res, t("failedCreate")));
+        return;
       }
+      const data = await res.json();
+      onCreated(data.node);
+      setFormData({
+        name: "",
+        prefix: "",
+        baseUrl: "https://api.anthropic.com/v1",
+        chatPath: "",
+        modelsPath: "",
+      });
+      setCheckKey("");
+      setValidationResult(null);
+      setShowAdvanced(false);
     } catch (error) {
       console.log("Error creating Anthropic Compatible node:", error);
+      setSubmitError(t("errorOccurred"));
     } finally {
       setSubmitting(false);
     }
@@ -1352,6 +1379,11 @@ function AddAnthropicCompatibleModal({ isOpen, onClose, onCreated }) {
             {validationResult === "success" ? t("valid") : t("invalid")}
           </Badge>
         )}
+        {submitError && (
+          <p className="text-sm text-red-500" role="alert">
+            {submitError}
+          </p>
+        )}
         <div className="flex gap-2">
           <Button
             onClick={handleSubmit}
@@ -1393,17 +1425,20 @@ function AddCcCompatibleModal({ isOpen, onClose, onCreated }) {
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState<"success" | "failed" | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [submitError, setSubmitError] = useState("");
 
   useEffect(() => {
     if (isOpen) {
       setValidationResult(null);
       setCheckKey("");
+      setSubmitError("");
     }
   }, [isOpen]);
 
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSubmitting(true);
+    setSubmitError("");
     try {
       const res = await fetch("/api/provider-nodes", {
         method: "POST",
@@ -1417,21 +1452,24 @@ function AddCcCompatibleModal({ isOpen, onClose, onCreated }) {
           chatPath: formData.chatPath || CC_COMPATIBLE_DEFAULT_CHAT_PATH,
         }),
       });
-      const data = await res.json();
-      if (res.ok) {
-        onCreated(data.node);
-        setFormData({
-          name: "",
-          prefix: "",
-          baseUrl: "https://api.anthropic.com",
-          chatPath: CC_COMPATIBLE_DEFAULT_CHAT_PATH,
-        });
-        setCheckKey("");
-        setValidationResult(null);
-        setShowAdvanced(false);
+      if (!res.ok) {
+        setSubmitError(await readApiError(res, t("failedCreate")));
+        return;
       }
+      const data = await res.json();
+      onCreated(data.node);
+      setFormData({
+        name: "",
+        prefix: "",
+        baseUrl: "https://api.anthropic.com",
+        chatPath: CC_COMPATIBLE_DEFAULT_CHAT_PATH,
+      });
+      setCheckKey("");
+      setValidationResult(null);
+      setShowAdvanced(false);
     } catch (error) {
       console.log("Error creating CC Compatible node:", error);
+      setSubmitError(t("errorOccurred"));
     } finally {
       setSubmitting(false);
     }
@@ -1535,6 +1573,11 @@ function AddCcCompatibleModal({ isOpen, onClose, onCreated }) {
           <Badge variant={validationResult === "success" ? "success" : "error"}>
             {validationResult === "success" ? t("valid") : t("invalid")}
           </Badge>
+        )}
+        {submitError && (
+          <p className="text-sm text-red-500" role="alert">
+            {submitError}
+          </p>
         )}
         <div className="flex gap-2">
           <Button

@@ -21,6 +21,8 @@ export default function MaintenanceBanner() {
 
   useEffect(() => {
     const checkHealth = async () => {
+      // Nobody is looking: skip the probe (it runs every 10s for as long as the tab lives).
+      if (typeof document !== "undefined" && document.hidden) return;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
       try {
@@ -55,28 +57,43 @@ export default function MaintenanceBanner() {
     // Run immediately on mount, then every 10 seconds
     checkHealth();
     const interval = setInterval(checkHealth, 10000);
-    return () => clearInterval(interval);
+    // Catch up as soon as the tab is shown again instead of up to 10s later.
+    document.addEventListener("visibilitychange", checkHealth);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener("visibilitychange", checkHealth);
+    };
   }, [t]);
 
   if (!show) return null;
 
   return (
-    <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 flex items-center justify-between gap-3 animate-in slide-in-from-top">
+    <div
+      role="alert"
+      className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 flex items-center justify-between gap-3 animate-in slide-in-from-top"
+    >
       <div className="flex items-center gap-2.5">
-        <span className="material-symbols-outlined text-amber-500 text-[18px] animate-pulse">
+        <span
+          className="material-symbols-outlined text-amber-600 dark:text-amber-500 text-[18px] animate-pulse"
+          aria-hidden="true"
+        >
           warning
         </span>
-        <span className="text-sm text-amber-200">{message}</span>
+        {/* amber-200 is a pale yellow: invisible on the light theme's near-white banner */}
+        <span className="text-sm text-amber-800 dark:text-amber-200">{message}</span>
       </div>
       <button
+        type="button"
         onClick={() => {
           dismissedUntilRecoveryRef.current = true;
           setShow(false);
         }}
-        className="p-1 rounded hover:bg-white/5 text-text-muted hover:text-text-main transition-colors"
+        className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 text-text-muted hover:text-text-main transition-colors"
         aria-label={t("close")}
       >
-        <span className="material-symbols-outlined text-[16px]">close</span>
+        <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
+          close
+        </span>
       </button>
     </div>
   );

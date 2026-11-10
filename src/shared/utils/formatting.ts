@@ -13,6 +13,8 @@
 export function formatTime(isoString) {
   try {
     const d = new Date(isoString);
+    // new Date() never throws; an unparsable value has to be caught explicitly.
+    if (Number.isNaN(d.getTime())) return "-";
     return d.toLocaleTimeString("en-US", {
       hour12: false,
       hour: "2-digit",
@@ -36,14 +38,15 @@ export function formatDuration(ms) {
 }
 
 /**
- * Format an ISO date to a full date+time string (pt-BR locale).
+ * Format an ISO date to a full date+time string in the viewer's locale.
  * @param {string} iso - ISO 8601 date string
  * @returns {string}
  */
 export function formatDateTime(iso) {
   try {
     const d = new Date(iso);
-    return d.toLocaleDateString("pt-BR") + ", " + d.toLocaleTimeString("en-US", { hour12: false });
+    if (Number.isNaN(d.getTime())) return iso ? String(iso) : "-";
+    return d.toLocaleDateString() + ", " + d.toLocaleTimeString("en-US", { hour12: false });
   } catch {
     return iso;
   }

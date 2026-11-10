@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Card, Button, Select, Badge } from "@/shared/components";
 import { ALIAS_TO_ID } from "@/shared/constants/providers";
 import { pickMaskedDisplayValue } from "@/shared/utils/maskEmail";
+import { copyToClipboard } from "@/shared/utils/clipboard";
 
 interface ModelInfo {
   id: string;
@@ -181,7 +182,6 @@ export default function PlaygroundPage() {
   const [allConnections, setAllConnections] = useState<ConnectionOption[]>([]);
   const [selectedProvider, setSelectedProvider] = useState("");
   const [selectedModel, setSelectedModel] = useState("");
-  const [selectedConnection, setSelectedConnection] = useState("");
   const [selectedEndpoint, setSelectedEndpoint] = useState("chat");
   const [requestBody, setRequestBody] = useState("");
   const [responseBody, setResponseBody] = useState("");
@@ -229,7 +229,15 @@ export default function PlaygroundPage() {
           .map((p) => ({ value: p, label: p }));
         setProviders(providerOpts);
         if (providerOpts.length > 0) {
-          setSelectedProvider(providerOpts[0].value);
+          // Select the provider's first model and prefill the request too (as changing the
+          // provider does). Selecting only the provider left the model on "Select an
+          // option", the request body empty and Send disabled on first load.
+          const firstProvider = providerOpts[0].value;
+          const firstModel = modelList.find((m) => m.id.startsWith(firstProvider + "/"))?.id || "";
+          setSelectedProvider(firstProvider);
+          setSelectedModel((current) => current || firstModel);
+          // Keep anything the user already typed/selected while the model list was loading.
+          setRequestBody((current) => current || generateDefaultBody("chat", firstModel));
         }
       })
       .catch(() => {});
@@ -266,7 +274,6 @@ export default function PlaygroundPage() {
 
   const handleProviderChange = (newProvider: string) => {
     setSelectedProvider(newProvider);
-    setSelectedConnection("");
     const providerModels = models
       .filter((m) => !newProvider || m.id.startsWith(newProvider + "/"))
       .map((m) => m.id);
@@ -360,13 +367,8 @@ export default function PlaygroundPage() {
         } catch {
           /* ignore parse errors */
         }
-        const fetchHeaders: Record<string, string> = {};
-        if (selectedConnection) {
-          fetchHeaders["X-CoolRouter-Connection"] = selectedConnection;
-        }
         res = await fetch(`/api${path}`, {
           method: "POST",
-          headers: fetchHeaders,
           body: form,
           signal: controller.signal,
         });
@@ -376,13 +378,9 @@ export default function PlaygroundPage() {
         if (supportsVision && uploadedImages.length > 0) {
           parsed = buildChatBodyWithImages(parsed, uploadedImages);
         }
-        const fetchHeaders: Record<string, string> = { "Content-Type": "application/json" };
-        if (selectedConnection) {
-          fetchHeaders["X-CoolRouter-Connection"] = selectedConnection;
-        }
         res = await fetch(`/api${path}`, {
           method: "POST",
-          headers: fetchHeaders,
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(parsed),
           signal: controller.signal,
         });
@@ -439,11 +437,8 @@ export default function PlaygroundPage() {
   };
 
   const handleCopy = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch {
-      /* silent */
-    }
+    // Falls back to execCommand on plain-HTTP origins, where navigator.clipboard is undefined.
+    await copyToClipboard(text);
   };
 
   return (
@@ -508,30 +503,20 @@ export default function PlaygroundPage() {
             </div>
           )}
 
-          {/* Account/Key — always shown when provider is selected */}
-          {!isSearchEndpoint && (
+          {/* Which account serves the request is the router's decision (priority, health,
+              rate limits). There used to be an "Account / Key" picker here, but the
+              header it sent is not read by the server, so it never pinned anything. Say
+              how many accounts the provider has instead. */}
+          {!isSearchEndpoint && selectedProvider && (
             <div className="flex-1 w-full">
-              <label className="block text-xs font-medium text-text-muted mb-1.5 uppercase tracking-wider">
-                Account / Key
-              </label>
-              <Select
-                value={selectedConnection}
-                onChange={(e: any) => setSelectedConnection(e.target.value)}
-                options={[
-                  {
-                    value: "",
-                    label:
-                      providerConnections.length > 0
-                        ? `Auto (${providerConnections.length} accounts)`
-                        : "No accounts",
-                  },
-                  ...providerConnections.map((c) => ({
-                    value: c.id,
-                    label: c.name,
-                  })),
-                ]}
-                className="w-full"
-              />
+              <span className="block text-xs font-medium text-text-muted mb-1.5 uppercase tracking-wider">
+                Accounts
+              </span>
+              <p className="flex h-[38px] items-center rounded-md border border-border px-3 text-sm text-text-muted">
+                {providerConnections.length > 0
+                  ? `${providerConnections.length} connected — picked automatically`
+                  : "None connected for this provider"}
+              </p>
             </div>
           )}
 

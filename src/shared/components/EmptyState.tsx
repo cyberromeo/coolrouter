@@ -1,20 +1,23 @@
 "use client";
 
 /**
- * EmptyState — FASE-07 UX
- *
- * Reusable empty state component for dashboard sections when no data
- * is available. Provides visual feedback and optional action button.
+ * EmptyState — what a section shows when there is nothing in it yet, with an optional
+ * action to create the first item.
  *
  * Usage:
  *   <EmptyState
- *     icon="📡"
+ *     icon="hub"
  *     title="No providers yet"
  *     description="Add your first API provider to get started."
- *     actionLabel="Add Provider"
- *     onAction={() => router.push('/providers/add')}
+ *     actionLabel="Add provider"
+ *     onAction={() => router.push("/dashboard/providers/new")}
  *   />
+ *
+ * `icon` is a Material Symbols name ("hub", "timeline"). An emoji or any other
+ * non-identifier string is rendered as-is for backwards compatibility.
  */
+
+import Button from "./Button";
 
 interface EmptyStateProps {
   icon?: string;
@@ -24,94 +27,38 @@ interface EmptyStateProps {
   onAction?: (() => void) | null;
 }
 
+const ICON_NAME = /^[a-z0-9_]+$/;
+
 export default function EmptyState({
-  icon = "📭",
+  icon = "inbox",
   title = "Nothing here yet",
   description = "",
   actionLabel = "",
   onAction = null,
 }: EmptyStateProps) {
+  const isIconName = ICON_NAME.test(icon);
+
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "48px 24px",
-        textAlign: "center",
-        minHeight: "200px",
-      }}
-    >
+    <div className="flex min-h-[200px] flex-col items-center justify-center rounded-lg border border-dashed border-border px-6 py-12 text-center">
       <div
-        style={{
-          fontSize: "48px",
-          marginBottom: "16px",
-          opacity: 0.8,
-          animation: "emptyBounce 2s ease-in-out infinite",
-        }}
-        role="img"
+        className="mb-4 flex size-11 items-center justify-center rounded-lg border border-border bg-surface text-text-muted"
         aria-hidden="true"
       >
-        {icon}
+        {isIconName ? (
+          <span className="material-symbols-outlined text-[22px]">{icon}</span>
+        ) : (
+          <span className="text-xl leading-none">{icon}</span>
+        )}
       </div>
-      <h3
-        style={{
-          fontSize: "18px",
-          fontWeight: 600,
-          color: "var(--text-primary, #e0e0e0)",
-          marginBottom: "8px",
-          margin: 0,
-        }}
-      >
-        {title}
-      </h3>
+      <h3 className="text-base font-semibold text-text-main">{title}</h3>
       {description && (
-        <p
-          style={{
-            fontSize: "14px",
-            color: "var(--text-secondary, #888)",
-            maxWidth: "320px",
-            lineHeight: 1.5,
-            marginTop: "8px",
-          }}
-        >
-          {description}
-        </p>
+        <p className="mt-1.5 max-w-sm text-sm leading-relaxed text-text-muted">{description}</p>
       )}
       {actionLabel && onAction && (
-        <button
-          onClick={onAction}
-          style={{
-            marginTop: "20px",
-            padding: "10px 24px",
-            borderRadius: "8px",
-            border: "1px solid rgba(99, 102, 241, 0.4)",
-            background: "rgba(99, 102, 241, 0.15)",
-            color: "#818cf8",
-            fontSize: "14px",
-            fontWeight: 500,
-            cursor: "pointer",
-            transition: "all 0.2s ease",
-          }}
-          onMouseEnter={(e) => {
-            (e.currentTarget as HTMLElement).style.background = "rgba(99, 102, 241, 0.25)";
-            (e.currentTarget as HTMLElement).style.transform = "translateY(-1px)";
-          }}
-          onMouseLeave={(e) => {
-            (e.currentTarget as HTMLElement).style.background = "rgba(99, 102, 241, 0.15)";
-            (e.currentTarget as HTMLElement).style.transform = "translateY(0)";
-          }}
-        >
+        <Button className="mt-5" icon="add" onClick={onAction}>
           {actionLabel}
-        </button>
+        </Button>
       )}
-      <style>{`
-        @keyframes emptyBounce {
-          0%, 100% { transform: translateY(0); }
-          50%      { transform: translateY(-8px); }
-        }
-      `}</style>
     </div>
   );
 }

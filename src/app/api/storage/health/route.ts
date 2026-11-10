@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import path from "path";
 import fs from "fs";
 import { resolveDataDir } from "@/lib/dataPaths";
+import { getLiveDbSizeBytes } from "@/lib/db/backup";
 import {
   getAppLogRetentionDays,
   getCallLogRetentionDays,
@@ -19,12 +20,13 @@ export async function GET() {
     const dbFilePath = path.join(dataDir, "storage.sqlite");
     const backupsDir = path.join(dataDir, "db_backups");
 
-    // Get DB file size
+    // Get DB size. In WAL mode recent writes live in storage.sqlite-wal until the next
+    // checkpoint (a fresh install reported "4 KB" for a 600 KB database), so ask SQLite
+    // for the logical size instead of trusting the main file alone.
     let sizeBytes = 0;
     try {
       if (fs.existsSync(dbFilePath)) {
-        const stat = fs.statSync(dbFilePath);
-        sizeBytes = stat.size;
+        sizeBytes = getLiveDbSizeBytes(fs.statSync(dbFilePath).size);
       }
     } catch {
       /* ignore */

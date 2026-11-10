@@ -1,4 +1,6 @@
+import fs from "fs";
 import path from "path";
+import { resolveDataDir } from "./dataPaths";
 
 const DEFAULT_APP_LOG_RETENTION_DAYS = 7;
 const DEFAULT_CALL_LOG_RETENTION_DAYS = 7;
@@ -40,8 +42,38 @@ export function getAppLogToFile(): boolean {
   return process.env.APP_LOG_TO_FILE !== "false";
 }
 
+let resolvedDefaultAppLogPath: string | null = null;
+
+/**
+ * Default log file: <cwd>/logs/application/app.log, as documented.
+ *
+ * The desktop build runs from its install folder (C:\Program Files\Cool Router\resources\app
+ * on Windows), which a normal user cannot write to: creating logs/ failed, every log write
+ * was swallowed, and the Console Log viewer stayed empty. When the cwd location is not
+ * writable, keep the logs next to the database instead — in app-logs/, because
+ * <DATA_DIR>/logs is the legacy request-log folder that src/lib/usage/migrations.ts
+ * archives and deletes at startup.
+ */
+function resolveDefaultAppLogPath(): string {
+  if (resolvedDefaultAppLogPath) return resolvedDefaultAppLogPath;
+
+  let chosen = DEFAULT_APP_LOG_PATH;
+  if (getAppLogToFile()) {
+    try {
+      fs.mkdirSync(path.dirname(DEFAULT_APP_LOG_PATH), { recursive: true });
+      // Opening for append is the only reliable write test on Windows (ACLs, not mode bits)
+      fs.closeSync(fs.openSync(DEFAULT_APP_LOG_PATH, "a"));
+    } catch {
+      chosen = path.join(resolveDataDir(), "app-logs", "app.log");
+    }
+  }
+
+  resolvedDefaultAppLogPath = chosen;
+  return chosen;
+}
+
 export function getAppLogFilePath(): string {
-  return process.env.APP_LOG_FILE_PATH || DEFAULT_APP_LOG_PATH;
+  return process.env.APP_LOG_FILE_PATH || resolveDefaultAppLogPath();
 }
 
 export function getAppLogMaxFileSize(): number {

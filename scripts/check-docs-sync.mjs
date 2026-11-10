@@ -78,6 +78,20 @@ try {
     console.log(`[docs-sync] openapi.yaml info.version matches: ${openApiVersion}`);
   }
 
+  // The desktop shell and the open-sse workspace are released together with the app.
+  // electron-builder names the installers and the auto-updater compares versions from
+  // electron/package.json, so a missed bump there ships an installer with the old number.
+  for (const relative of ["electron/package.json", "open-sse/package.json"]) {
+    const filePath = path.resolve(cwd, relative);
+    if (!fs.existsSync(filePath)) continue;
+    const version = JSON.parse(readText(filePath)).version;
+    if (version !== packageVersion) {
+      fail(`${relative} version (${version}) differs from package.json (${packageVersion})`);
+    } else {
+      console.log(`[docs-sync] ${relative} version matches: ${version}`);
+    }
+  }
+
   const changelogSections = extractChangelogSections(readText(changelogPath));
   if (changelogSections.length === 0) {
     fail("CHANGELOG.md has no version sections");

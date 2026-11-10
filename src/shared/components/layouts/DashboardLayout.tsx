@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
+import { usePathname } from "next/navigation";
 import Sidebar from "../Sidebar";
 import Header from "../Header";
 import Breadcrumbs from "../Breadcrumbs";
@@ -10,19 +11,40 @@ import UpdateBanner from "../UpdateBanner";
 import { useIsElectron } from "@/shared/hooks/useElectron";
 
 const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed";
+const SIDEBAR_COLLAPSED_EVENT = "coolrouter:sidebar-collapsed";
 const isE2EMode = process.env.NEXT_PUBLIC_COOLROUTER_E2E_MODE === "1";
+
+// The collapsed flag lives in localStorage. Reading it during the first render (a
+// useState initializer) makes the client markup differ from the server's, and React then
+// keeps the server version — the sidebar came up expanded with a state that said
+// collapsed. useSyncExternalStore renders the server value first and switches after
+// hydration.
+function subscribeToSidebarCollapsed(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(SIDEBAR_COLLAPSED_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, onChange);
+  };
+}
+
+function readSidebarCollapsed() {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 export default function DashboardLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const isElectron = useIsElectron();
-  const [collapsed, setCollapsed] = useState(() => {
-    if (typeof window === "undefined") return false;
-    try {
-      return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
-    } catch {
-      return false;
-    }
-  });
+  const pathname = usePathname();
+  const collapsed = useSyncExternalStore(
+    subscribeToSidebarCollapsed,
+    readSidebarCollapsed,
+    () => false
+  );
 
   const isMacElectron =
     isElectron && typeof window !== "undefined" && window.electronAPI?.platform === "darwin";
@@ -38,10 +60,19 @@ export default function DashboardLayout({ children }) {
   }, [isMacElectron]);
 
   const handleToggleCollapse = () => {
-    const next = !collapsed;
-    setCollapsed(next);
-    localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(!collapsed));
+    } catch {
+      /* storage unavailable */
+    }
+    window.dispatchEvent(new Event(SIDEBAR_COLLAPSED_EVENT));
   };
+
+  // The first-run setup wizard is a focused, full-screen flow: no sidebar or header to
+  // wander off into before setup is finished.
+  if (pathname?.startsWith("/dashboard/onboarding")) {
+    return <>{children}</>;
+  }
 
   return (
     <div className="flex h-dvh min-h-0 w-full overflow-hidden bg-bg">

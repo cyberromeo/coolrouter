@@ -24,6 +24,7 @@ import {
   oauthPollSchema,
 } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 // Use globalThis to persist callback server state across Next.js HMR reloads
 if (!globalThis.__codexCallbackState) {
@@ -53,6 +54,11 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ provider: string; action: string }> }
 ) {
+  // The whole /api/oauth/ prefix is on the proxy's public allowlist, so this handler has to
+  // authenticate by itself: it is only ever called by the signed-in dashboard.
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   try {
     const { provider, action } = await params;
     const { searchParams } = new URL(request.url);
@@ -187,6 +193,11 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ provider: string; action: string }> }
 ) {
+  // The whole /api/oauth/ prefix is on the proxy's public allowlist, so this handler has to
+  // authenticate by itself: it is only ever called by the signed-in dashboard.
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   try {
     const { provider, action } = await params;
     let rawBody: any = {};

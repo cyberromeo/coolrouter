@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo, useCallback, memo } from "react";
 import { Card, Button, Input, Modal, CardSkeleton } from "@/shared/components";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import { useTranslations } from "next-intl";
 
 // Constants for validation
@@ -238,15 +239,16 @@ export default function ApiManagerPageClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: sanitizedName }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
 
       if (res.ok) {
-        setCreatedKey(data.key);
+        setCreatedKey(data?.key ?? null);
         await fetchData();
         setNewKeyName("");
         setShowAddModal(false);
       } else {
-        setError(data.error || t("failedCreateKey"));
+        // data.error can be an object (validation / auth gate); rendering it crashes the page.
+        setError(getApiErrorMessage(data, t("failedCreateKey")));
       }
     } catch (error) {
       console.error("Error creating key:", error);
@@ -273,8 +275,8 @@ export default function ApiManagerPageClient() {
       if (res.ok) {
         setKeys((prev) => prev.filter((k) => k.id !== id));
       } else {
-        const data = await res.json();
-        setError(data.error || t("failedDeleteKey"));
+        const data = await res.json().catch(() => null);
+        setError(getApiErrorMessage(data, t("failedDeleteKey")));
       }
     } catch (error) {
       console.error("Error deleting key:", error);
@@ -286,8 +288,14 @@ export default function ApiManagerPageClient() {
 
   const handleOpenPermissions = (key: ApiKey) => {
     if (!key || !key.id) return;
+    clearError();
     setEditingKey(key);
     setShowPermissionsModal(true);
+  };
+
+  const openAddModal = () => {
+    clearError();
+    setShowAddModal(true);
   };
 
   const handleCopyExistingKey = async (keyId: string) => {
@@ -369,8 +377,8 @@ export default function ApiManagerPageClient() {
         setShowPermissionsModal(false);
         setEditingKey(null);
       } else {
-        const data = await res.json();
-        setError(data.error || t("failedUpdatePermissions"));
+        const data = await res.json().catch(() => null);
+        setError(getApiErrorMessage(data, t("failedUpdatePermissions")));
       }
     } catch (error) {
       console.error("Error updating permissions:", error);
@@ -400,14 +408,12 @@ export default function ApiManagerPageClient() {
 
     const search = debouncedSearchModel.toLowerCase();
     return modelsByProvider
-      .map(
-        ([provider, models]): ProviderGroup => [
-          provider,
-          models.filter(
-            (m) => m.id.toLowerCase().includes(search) || provider.toLowerCase().includes(search)
-          ),
-        ]
-      )
+      .map(([provider, models]): ProviderGroup => [
+        provider,
+        models.filter(
+          (m) => m.id.toLowerCase().includes(search) || provider.toLowerCase().includes(search)
+        ),
+      ])
       .filter(([, models]) => models.length > 0);
   }, [modelsByProvider, debouncedSearchModel]);
 
@@ -502,7 +508,7 @@ export default function ApiManagerPageClient() {
             <h2 className="text-lg font-semibold">{t("keyManagement")}</h2>
             <p className="text-sm text-text-muted">{t("keyManagementDesc")}</p>
           </div>
-          <Button icon="add" onClick={() => setShowAddModal(true)}>
+          <Button icon="add" onClick={openAddModal}>
             {t("createKey")}
           </Button>
         </div>
@@ -518,7 +524,6 @@ export default function ApiManagerPageClient() {
             <div>
               <h3 className="font-semibold">{t("registeredKeys")}</h3>
               <p className="text-xs text-text-muted">
-                {keys.length}{" "}
                 {keys.length === 1
                   ? t("keyRegistered", { count: keys.length })
                   : t("keysRegistered", { count: keys.length })}
@@ -536,7 +541,7 @@ export default function ApiManagerPageClient() {
             </div>
             <p className="text-text-main font-medium mb-2">{t("noKeys")}</p>
             <p className="text-sm text-text-muted mb-4">{t("noKeysDesc")}</p>
-            <Button icon="add" onClick={() => setShowAddModal(true)}>
+            <Button icon="add" onClick={openAddModal}>
               {t("createFirstKey")}
             </Button>
           </div>
@@ -756,6 +761,12 @@ export default function ApiManagerPageClient() {
             />
             <p className="text-xs text-text-muted mt-1.5">{t("keyNameDesc")}</p>
           </div>
+          {/* The page-level banner sits behind this dialog; repeat the error where it is seen. */}
+          {error && (
+            <p className="text-sm text-red-500" role="alert">
+              {error}
+            </p>
+          )}
           <div className="flex gap-2">
             <Button
               onClick={() => {
@@ -767,7 +778,11 @@ export default function ApiManagerPageClient() {
             >
               {tc("cancel")}
             </Button>
-            <Button onClick={handleCreateKey} fullWidth disabled={!newKeyName.trim()}>
+            <Button
+              onClick={handleCreateKey}
+              fullWidth
+              disabled={!newKeyName.trim() || isSubmitting}
+            >
               {t("createKey")}
             </Button>
           </div>
@@ -822,6 +837,8 @@ export default function ApiManagerPageClient() {
           searchModel={searchModel}
           onSearchChange={setSearchModel}
           onSave={handleUpdatePermissions}
+          error={error}
+          saving={isSubmitting}
         />
       )}
     </div>
@@ -840,6 +857,8 @@ const PermissionsModal = memo(function PermissionsModal({
   searchModel,
   onSearchChange,
   onSave,
+  error,
+  saving,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -849,6 +868,9 @@ const PermissionsModal = memo(function PermissionsModal({
   allConnections: ProviderConnection[];
   searchModel: string;
   onSearchChange: (v: string) => void;
+  /** Save error to show inside the dialog (the page banner is hidden behind it). */
+  error?: string | null;
+  saving?: boolean;
   onSave: (
     models: string[],
     noLog: boolean,
@@ -1517,9 +1539,15 @@ const PermissionsModal = memo(function PermissionsModal({
           </div>
         )}
 
+        {error && (
+          <p className="text-sm text-red-500" role="alert">
+            {error}
+          </p>
+        )}
+
         {/* Actions */}
         <div className="flex gap-2">
-          <Button onClick={handleSave} fullWidth>
+          <Button onClick={handleSave} fullWidth disabled={saving}>
             {t("savePermissions")}
           </Button>
           <Button onClick={onClose} variant="ghost" fullWidth>

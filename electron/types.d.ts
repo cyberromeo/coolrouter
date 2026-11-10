@@ -19,6 +19,15 @@ export interface AppInfo {
 export interface ServerStatus {
   status: "starting" | "running" | "stopped" | "restarting" | "error";
   port: number;
+  /** Human-readable reason when status is "error". */
+  error?: string | null;
+}
+
+/** Full state for the splash / error screen (electron/splash.html). */
+export interface ServerState extends ServerStatus {
+  version: string;
+  logFile: string;
+  logTail: string[];
 }
 
 export interface UpdateState {
@@ -46,7 +55,11 @@ export interface ElectronAPI {
   getAppInfo(): Promise<AppInfo>;
   openExternal(url: string): Promise<void>;
   getDataDir(): Promise<string>;
+  getServerState(): Promise<ServerState>;
   restartServer(): Promise<{ success: boolean }>;
+  openLogs(): Promise<void>;
+  openDataDir(): Promise<string>;
+  quitApp(): Promise<void>;
   getAppVersion(): Promise<string>;
   checkForUpdates(): Promise<{ success: boolean; state?: UpdateState; error?: string }>;
   downloadUpdate(): Promise<{ success: boolean; error?: string }>;

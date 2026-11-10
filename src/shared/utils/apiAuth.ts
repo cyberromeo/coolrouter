@@ -15,7 +15,8 @@ import { getSettings } from "@/lib/localDb";
 
 /**
  * Routes that are ALWAYS accessible without authentication.
- * Pattern matching: startsWith check against the pathname.
+ * An entry matches the path itself and everything below it ("/api/v1" covers "/api/v1"
+ * and "/api/v1/chat/completions", but not "/api/v1beta" or "/api/v10").
  */
 const PUBLIC_API_ROUTES = [
   // Auth flow — must be accessible to unauthenticated users
@@ -23,23 +24,24 @@ const PUBLIC_API_ROUTES = [
   "/api/auth/logout",
   "/api/auth/status",
 
-  // Settings check — used by login page / onboarding
+  // Settings check — used by login page / onboarding. The POST handler polices itself:
+  // it only accepts unauthenticated calls while no password exists yet.
   "/api/settings/require-login",
-
-  // Init — first-run setup
-  "/api/init",
 
   // Health monitoring — probes must work without auth
   "/api/monitoring/health",
 
-  // LLM proxy routes — use their own API key auth in the SSE layer
-  "/api/v1/",
+  // LLM proxy routes — use their own API key auth in the SSE layer.
+  // /api/v1beta is the Gemini-format surface, /api/tags the Ollama model list; clients
+  // of both send an API key (or nothing), never the dashboard session cookie.
+  "/api/v1",
+  "/api/v1beta",
+  "/api/tags",
 
-  // Cloud routes — use Bearer API key auth internally
-  "/api/cloud/",
-
-  // OAuth callback routes — provider redirects back here
-  "/api/oauth/",
+  // Not here on purpose: /api/oauth. Providers redirect to the /callback *page*, which
+  // hands the code to the signed-in dashboard; every /api/oauth route is called from
+  // there. While the prefix was public, anyone who could reach the port could attach
+  // their own account as a provider connection.
 ];
 
 // ──────────────── Auth Verification ────────────────
@@ -127,7 +129,7 @@ export async function isAuthenticated(request: Request): Promise<boolean> {
  * Check if a route is in the public (no-auth) allowlist.
  */
 export function isPublicRoute(pathname: string): boolean {
-  return PUBLIC_API_ROUTES.some((route) => pathname.startsWith(route));
+  return PUBLIC_API_ROUTES.some((route) => pathname === route || pathname.startsWith(`${route}/`));
 }
 
 /**

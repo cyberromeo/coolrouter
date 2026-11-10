@@ -2,6 +2,8 @@ import { getRequestConfig } from "next-intl/server";
 import { cookies, headers } from "next/headers";
 import { LOCALES, DEFAULT_LOCALE, LOCALE_COOKIE } from "./config";
 import type { Locale } from "./config";
+import { withFallbackMessages, type Messages } from "./fallbackMessages";
+import defaultMessages from "./messages/en.json";
 
 export default getRequestConfig(async () => {
   // 1. Try cookie
@@ -19,7 +21,14 @@ export default getRequestConfig(async () => {
     locale = DEFAULT_LOCALE;
   }
 
-  const messages = (await import(`./messages/${locale}.json`)).default;
+  // Untranslated keys fall back to English (see withFallbackMessages).
+  const messages =
+    locale === DEFAULT_LOCALE
+      ? (defaultMessages as Messages)
+      : withFallbackMessages(
+          defaultMessages as Messages,
+          (await import(`./messages/${locale}.json`)).default as Messages
+        );
 
   return {
     locale,

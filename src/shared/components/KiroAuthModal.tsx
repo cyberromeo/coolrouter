@@ -5,6 +5,7 @@ import PropTypes from "prop-types";
 import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 /**
  * Kiro Auth Method Selection Modal
@@ -19,6 +20,17 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
   const [importing, setImporting] = useState(false);
   const [autoDetecting, setAutoDetecting] = useState(false);
   const [autoDetected, setAutoDetected] = useState(false);
+
+  // Start from the method list every time the dialog is opened. It stays mounted, so after
+  // an import it used to reopen on the import form with the old token still filled in.
+  useEffect(() => {
+    if (isOpen) return;
+    setSelectedMethod(null);
+    setRefreshToken("");
+    setError(null);
+    setAutoDetected(false);
+    setImporting(false);
+  }, [isOpen]);
 
   // Auto-detect token when import method is selected
   useEffect(() => {
@@ -37,7 +49,7 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
           setRefreshToken(data.refreshToken);
           setAutoDetected(true);
         } else {
-          setError(data.error || "Could not auto-detect token");
+          setError(getApiErrorMessage(data, "Could not auto-detect token"));
         }
       } catch (err) {
         setError("Failed to auto-detect token");
@@ -75,13 +87,15 @@ export default function KiroAuthModal({ isOpen, onMethodSelect, onClose }) {
         body: JSON.stringify({ refreshToken: refreshToken.trim() }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.error || "Import failed");
+        throw new Error(getApiErrorMessage(data, "Import failed"));
       }
 
-      // Success - close modal
+      // Success - let the page reload its connection list (the wrapper maps "import" to
+      // onSuccess), then close. Closing alone left the new account invisible until reload.
+      onMethodSelect("import");
       onClose();
     } catch (err) {
       setError(err.message);

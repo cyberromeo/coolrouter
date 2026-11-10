@@ -449,6 +449,132 @@ export function translateNonStreamingResponse(
 }
 
 /**
+ * Convert an OpenAI chat.completion JSON object to an OpenAI Responses API object, for
+ * non-streaming clients of POST /v1/responses. Item ids follow the streaming translator
+ * (resp_<id>, msg_<resp>_0, fc_<call_id>). Anything that is not a chat.completion — e.g. a
+ * native Responses payload — is returned unchanged.
+ */
+export function convertOpenAINonStreamingToResponses(openaiResponse: unknown): unknown {
+  const root = toRecord(openaiResponse);
+  if (!Array.isArray(root.choices)) return openaiResponse;
+
+  const choice = toRecord(root.choices[0]);
+  const message = toRecord(choice.message);
+  const rawId = toString(root.id, String(Date.now()));
+  const responseId = rawId.startsWith("resp_") ? rawId : `resp_${rawId}`;
+
+  const finishReason = toString(choice.finish_reason);
+  const incompleteReason =
+    finishReason === "length"
+      ? "max_output_tokens"
+      : finishReason === "content_filter"
+        ? "content_filter"
+        : null;
+  const status = incompleteReason ? "incomplete" : "completed";
+
+  const output: JsonRecord[] = [];
+
+  const reasoningText = toString(message.reasoning_content);
+  if (reasoningText) {
+    output.push({
+      id: `rs_${responseId}_0`,
+      type: "reasoning",
+      summary: [{ type: "summary_text", text: reasoningText }],
+    });
+  }
+
+  let text = "";
+  if (typeof message.content === "string") {
+    text = message.content;
+  } else if (Array.isArray(message.content)) {
+    for (const part of message.content) {
+      const partObj = toRecord(part);
+      if (typeof partObj.text === "string") text += partObj.text;
+    }
+  }
+  const refusal = toString(message.refusal);
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+  // A tool-call-only turn has no message item; every other turn has exactly one.
+  if (text || refusal || toolCalls.length === 0) {
+    output.push({
+      id: `msg_${responseId}_0`,
+      type: "message",
+      status,
+      role: "assistant",
+      content: [
+        ...(text || !refusal ? [{ type: "output_text", text, annotations: [] }] : []),
+        ...(refusal ? [{ type: "refusal", refusal }] : []),
+      ],
+    });
+  }
+
+  for (const toolCallValue of toolCalls) {
+    const toolCall = toRecord(toolCallValue);
+    const fn = toRecord(toolCall.function);
+    const callId = toString(toolCall.id) || `call_${Date.now()}_${output.length}`;
+    output.push({
+      id: `fc_${callId}`,
+      type: "function_call",
+      status: "completed",
+      call_id: callId,
+      name: toString(fn.name),
+      arguments:
+        typeof fn.arguments === "string" ? fn.arguments : JSON.stringify(fn.arguments ?? {}),
+    });
+  }
+
+  const result: JsonRecord = {
+    id: responseId,
+    object: "response",
+    created_at: toNumber(root.created, Math.floor(Date.now() / 1000)),
+    status,
+    error: null,
+    incomplete_details: incompleteReason ? { reason: incompleteReason } : null,
+    model: toString(root.model, "unknown"),
+    output,
+  };
+
+  // Usage arrives either Chat-style (prompt_/completion_tokens) or already filtered to the
+  // Responses field names (input_/output_tokens) by chatCore.
+  const usage = toRecord(root.usage);
+  if (Object.keys(usage).length > 0) {
+    const inputTokens = toNumber(usage.input_tokens ?? usage.prompt_tokens, 0);
+    const outputTokens = toNumber(usage.output_tokens ?? usage.completion_tokens, 0);
+    const responsesUsage: JsonRecord = {
+      input_tokens: inputTokens,
+      output_tokens: outputTokens,
+      total_tokens: inputTokens + outputTokens,
+    };
+
+    const inputDetails = toRecord(usage.input_tokens_details);
+    const promptDetails = toRecord(usage.prompt_tokens_details);
+    if (Object.keys(inputDetails).length > 0) {
+      responsesUsage.input_tokens_details = inputDetails;
+    } else if (toNumber(promptDetails.cached_tokens, 0) > 0) {
+      responsesUsage.input_tokens_details = {
+        cached_tokens: toNumber(promptDetails.cached_tokens, 0),
+      };
+    }
+
+    const outputDetails = toRecord(usage.output_tokens_details);
+    const completionDetails = toRecord(usage.completion_tokens_details);
+    if (Object.keys(outputDetails).length > 0) {
+      responsesUsage.output_tokens_details = outputDetails;
+    } else if (toNumber(completionDetails.reasoning_tokens, 0) > 0) {
+      responsesUsage.output_tokens_details = {
+        reasoning_tokens: toNumber(completionDetails.reasoning_tokens, 0),
+      };
+    }
+
+    if (usage.estimated === true) responsesUsage.estimated = true;
+    result.usage = responsesUsage;
+  }
+
+  return result;
+}
+
+/**
  * Helper to convert an OpenAI chat.completion JSON object to Claude format for non-streaming.
  */
 function convertOpenAINonStreamingToClaude(openaiResponse: JsonRecord): JsonRecord {

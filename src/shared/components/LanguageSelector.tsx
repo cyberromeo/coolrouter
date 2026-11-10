@@ -35,6 +35,16 @@ export default function LanguageSelector() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
+  // Close the dropdown with Escape (keyboard users had no way to dismiss it)
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [open]);
+
   const handleSelect = (code: Locale) => {
     if (code === locale) {
       setOpen(false);
@@ -50,13 +60,20 @@ export default function LanguageSelector() {
     <div ref={ref} className="relative">
       {/* Trigger button */}
       <button
+        type="button"
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-text-main hover:bg-surface-hover transition-all border border-transparent hover:border-border"
+        className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-sm font-medium text-text-main hover:bg-black/5 dark:hover:bg-white/5 transition-all border border-transparent hover:border-border"
         title={currentLang.name}
+        aria-label={`Language: ${currentLang.name}`}
+        aria-haspopup="true"
+        aria-expanded={open}
       >
-        <span className="text-base leading-none">{currentLang.flag}</span>
+        <span className="text-base leading-none" aria-hidden="true">
+          {currentLang.flag}
+        </span>
         <span className="text-xs font-semibold tracking-wide">{currentLang.label}</span>
         <span
+          aria-hidden="true"
           className={`material-symbols-outlined text-[14px] text-text-muted transition-transform ${open ? "rotate-180" : ""}`}
         >
           expand_more
@@ -65,21 +82,35 @@ export default function LanguageSelector() {
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute right-0 top-full mt-1 w-56 max-h-80 rounded-xl border border-border bg-bg shadow-xl z-50 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-150">
+        <div
+          role="group"
+          aria-label="Language"
+          className="absolute right-0 top-full mt-1 w-56 max-h-80 rounded-xl border border-border bg-bg shadow-xl z-50 overflow-y-auto animate-in fade-in slide-in-from-top-1 duration-150"
+        >
           {LANGUAGES.map((lang) => (
             <button
               key={lang.code}
+              type="button"
+              aria-current={lang.code === locale ? "true" : undefined}
+              lang={lang.code}
               onClick={() => handleSelect(lang.code)}
               className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-sm transition-colors ${
                 lang.code === locale
                   ? "bg-primary/10 text-primary font-semibold"
-                  : "text-text-main hover:bg-surface-hover"
+                  : "text-text-main hover:bg-black/5 dark:hover:bg-white/5"
               }`}
             >
-              <span className="text-base leading-none">{lang.flag}</span>
+              <span className="text-base leading-none" aria-hidden="true">
+                {lang.flag}
+              </span>
               <span className="flex-1 text-left">{lang.name}</span>
               {lang.code === locale && (
-                <span className="material-symbols-outlined text-[16px] text-primary">check</span>
+                <span
+                  className="material-symbols-outlined text-[16px] text-primary"
+                  aria-hidden="true"
+                >
+                  check
+                </span>
               )}
             </button>
           ))}

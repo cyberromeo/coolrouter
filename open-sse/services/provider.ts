@@ -89,6 +89,15 @@ export function detectFormatFromEndpoint(body, endpointPath = "") {
     return "openai";
   }
 
+  // The Gemini (/v1beta/models/{model}:generateContent) and Ollama (/v1/api/chat) routes
+  // convert their own wire format to OpenAI chat before entering the pipeline and convert the
+  // response back themselves, so the body seen here is always OpenAI-shaped. The body
+  // heuristics below would mis-detect it: an OpenAI body with max_tokens (from Gemini
+  // maxOutputTokens / Ollama num_predict) and no other OpenAI-only field looks like Claude.
+  if (/\/v1beta\/models\//i.test(path) || /\/api\/chat(?=\/|$)/i.test(path)) {
+    return "openai";
+  }
+
   return detectFormat(body);
 }
 

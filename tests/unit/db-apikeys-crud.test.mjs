@@ -148,3 +148,17 @@ test("getApiKeyMetadata ignores malformed stored schedule payloads", async () =>
 
   assert.equal(metadata.accessSchedule, null);
 });
+
+test("cached statements follow a connection swap without an explicit state reset", async () => {
+  const created = await apiKeysDb.createApiKey("Swap Test", "machine-303");
+  assert.equal(await apiKeysDb.validateApiKey(created.key), true);
+
+  // What a DB restore/import looks like to a server bundle (proxy middleware,
+  // instrumentation) that holds its own copy of this module and never gets
+  // resetApiKeyState(): the singleton connection is simply replaced.
+  core.resetDbInstance();
+  apiKeysDb.clearApiKeyCaches();
+
+  assert.equal(await apiKeysDb.validateApiKey(created.key), true);
+  assert.equal((await apiKeysDb.getApiKeys()).length, 1);
+});

@@ -1,6 +1,7 @@
 "use client";
 
-import { usePathname, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import Link from "next/link";
 import Image from "next/image";
 import PropTypes from "prop-types";
@@ -18,7 +19,6 @@ import {
   OPENAI_COMPATIBLE_PREFIX,
   ANTHROPIC_COMPATIBLE_PREFIX,
 } from "@/shared/constants/providers";
-import { useIsElectron } from "@/shared/hooks/useElectron";
 
 const isE2EMode = process.env.NEXT_PUBLIC_COOLROUTER_E2E_MODE === "1";
 
@@ -120,40 +120,49 @@ function usePageInfo(pathname: string | null): {
 
 export default function Header({ onMenuClick, showMenuButton = true }) {
   const pathname = usePathname();
-  const router = useRouter();
-  const isElectron = useIsElectron();
   const t = useTranslations("header");
   const { title, description, breadcrumbs } = usePageInfo(pathname);
-  const isMacElectron =
-    isElectron && typeof window !== "undefined" && window.electronAPI?.platform === "darwin";
+  // Signing out only means something when a password protects the dashboard; without
+  // one the login page sends the user straight back here.
+  const [canLogout, setCanLogout] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/settings/require-login", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!cancelled && data) setCanLogout(data.requireLogin !== false && !!data.hasPassword);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleLogout = async () => {
     try {
-      const res = await fetch("/api/auth/logout", { method: "POST" });
-      if (res.ok) {
-        router.push("/login");
-        router.refresh();
-      }
+      await fetch("/api/auth/logout", { method: "POST" });
     } catch (err) {
       console.error("Failed to logout:", err);
     }
+    // Full page load: drops every cached page of the signed-in session.
+    window.location.assign("/login");
   };
 
   return (
-    <header
-      className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-border bg-vibrancy px-6 lg:px-8"
-      style={{
-        paddingTop: isMacElectron ? "calc(1.25rem + var(--desktop-safe-top))" : undefined,
-      }}
-    >
+    <header className="sticky top-0 z-10 flex h-16 shrink-0 items-center justify-between border-b border-border bg-vibrancy px-6 lg:px-8">
       {/* Mobile menu button */}
       <div className="flex items-center gap-3 lg:hidden">
         {showMenuButton && (
           <button
+            type="button"
             onClick={onMenuClick}
+            aria-label="Open navigation"
             className="text-text-main hover:text-primary transition-colors"
           >
-            <span className="material-symbols-outlined">menu</span>
+            <span className="material-symbols-outlined" aria-hidden="true">
+              menu
+            </span>
           </button>
         )}
       </div>
@@ -226,13 +235,19 @@ export default function Header({ onMenuClick, showMenuButton = true }) {
         {!isE2EMode && <TokenHealthBadge />}
 
         {/* Logout button */}
-        <button
-          onClick={handleLogout}
-          className="flex items-center justify-center p-2 rounded-lg text-text-muted hover:text-red-500 hover:bg-red-500/10 transition-all"
-          title={t("logout")}
-        >
-          <span className="material-symbols-outlined">logout</span>
-        </button>
+        {canLogout && (
+          <button
+            type="button"
+            onClick={handleLogout}
+            className="flex items-center justify-center p-2 rounded-lg text-text-muted hover:text-red-500 hover:bg-red-500/10 transition-all"
+            title={t("logout")}
+            aria-label={t("logout")}
+          >
+            <span className="material-symbols-outlined" aria-hidden="true">
+              logout
+            </span>
+          </button>
+        )}
       </div>
     </header>
   );

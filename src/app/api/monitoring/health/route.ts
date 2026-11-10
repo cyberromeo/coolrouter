@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getProviderConnections, getSettings } from "@/lib/localDb";
 import { APP_CONFIG } from "@/shared/constants/config";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
+import { isAuthenticated } from "@/shared/utils/apiAuth";
 
 /**
  * GET /api/monitoring/health — System health overview
@@ -12,7 +13,8 @@ import { AI_PROVIDERS } from "@/shared/constants/providers";
 export async function GET() {
   try {
     const { getAllCircuitBreakerStatuses } = await import("@/shared/utils/circuitBreaker");
-    const { getAllRateLimitStatus } = await import("@coolrouter/open-sse/services/rateLimitManager");
+    const { getAllRateLimitStatus } =
+      await import("@coolrouter/open-sse/services/rateLimitManager");
     const { getAllModelLockouts } = await import("@coolrouter/open-sse/services/accountFallback");
     const { getInflightCount } = await import("@coolrouter/open-sse/services/requestDedup.ts");
 
@@ -88,7 +90,13 @@ export async function GET() {
  * Resets all provider circuit breakers to CLOSED state,
  * clearing failure counts and persisted state.
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  // This path is on the public allowlist so health probes work without a session; the
+  // reset is a management action and has to authenticate on its own.
+  if (!(await isAuthenticated(request))) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const { resetAllCircuitBreakers, getAllCircuitBreakerStatuses } =
       await import("@/shared/utils/circuitBreaker");

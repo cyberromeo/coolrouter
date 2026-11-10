@@ -1,5 +1,6 @@
 "use client";
 
+import { useId } from "react";
 import { cn } from "@/shared/utils/cn";
 
 interface ToggleProps {
@@ -21,7 +22,10 @@ export default function Toggle({
   disabled = false,
   size = "md",
   className,
+  title,
 }: ToggleProps) {
+  const labelId = useId();
+  const descriptionId = useId();
   const sizes = {
     sm: {
       track: "w-8 h-4",
@@ -58,14 +62,16 @@ export default function Toggle({
         type="button"
         role="switch"
         aria-checked={checked}
-        aria-label={!label ? description || "Toggle" : undefined}
+        aria-label={!label ? description || title || "Toggle" : undefined}
+        aria-labelledby={label ? labelId : undefined}
+        aria-describedby={label && description ? descriptionId : undefined}
+        title={title}
         disabled={disabled}
         onClick={handleClick}
         className={cn(
           "relative inline-flex shrink-0 cursor-pointer rounded-full",
           "transition-colors duration-200 ease-in-out",
-          "focus:outline-none focus:ring-1 focus:ring-primary/30",
-          checked ? "bg-primary" : "bg-black/10 dark:bg-white/20",
+          checked ? "bg-primary" : "bg-black/15 dark:bg-white/15",
           sizes[size].track,
           disabled && "cursor-not-allowed"
         )}
@@ -74,7 +80,9 @@ export default function Toggle({
           aria-hidden="true"
           className={cn(
             "pointer-events-none inline-block rounded-full shadow-sm",
-            checked ? "bg-primary-foreground" : "bg-white",
+            // Off is a dim knob on a dim track. With the monochrome palette "on" is a
+            // light pill in dark mode; a white knob for "off" made the two read alike.
+            checked ? "bg-primary-foreground" : "bg-white dark:bg-neutral-500",
             "transform transition duration-200 ease-in-out",
             checked ? sizes[size].translate : "translate-x-0.5",
             sizes[size].thumb,
@@ -84,8 +92,23 @@ export default function Toggle({
       </button>
       {(label || description) && (
         <div className="flex flex-col">
-          {label && <span className="text-sm font-medium text-text-main">{label}</span>}
-          {description && <span className="text-xs text-text-muted">{description}</span>}
+          {label && (
+            <span
+              id={labelId}
+              onClick={handleClick}
+              className={cn(
+                "text-sm font-medium text-text-main",
+                !disabled && "cursor-pointer select-none"
+              )}
+            >
+              {label}
+            </span>
+          )}
+          {description && (
+            <span id={descriptionId} className="text-xs text-text-muted">
+              {description}
+            </span>
+          )}
         </div>
       )}
     </div>

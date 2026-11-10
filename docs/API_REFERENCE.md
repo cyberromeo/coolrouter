@@ -18,6 +18,17 @@ Authorization: Bearer sk-...
 
 Keys are enforced when `REQUIRE_API_KEY=true`, which is recommended whenever the server is reachable from other machines. With the default `REQUIRE_API_KEY=false`, requests without a key are accepted, but a key is still needed for per-key limits and usage tracking.
 
+SDKs for the other formats send the key their own way, and those work too:
+
+| Client format | Where the key goes                                |
+| ------------- | ------------------------------------------------- |
+| OpenAI        | `Authorization: Bearer sk-...`                    |
+| Anthropic     | `x-api-key: sk-...` (or the Bearer header)        |
+| Gemini        | `x-goog-api-key: sk-...` or `?key=sk-...`         |
+| Ollama        | `Authorization: Bearer sk-...` (most clients can) |
+
+The dashboard password does not apply to these endpoints; only API keys do.
+
 ## Model names
 
 | Form             | Example              | Meaning                                              |
@@ -30,31 +41,57 @@ Keys are enforced when `REQUIRE_API_KEY=true`, which is recommended whenever the
 
 ## Endpoints
 
-| Method | Path                                          | Format                         |
-| ------ | --------------------------------------------- | ------------------------------ |
-| POST   | `/v1/chat/completions`                        | OpenAI Chat Completions        |
-| POST   | `/v1/completions`                             | OpenAI legacy completions      |
-| POST   | `/v1/responses`                               | OpenAI Responses               |
-| POST   | `/v1/messages`                                | Anthropic Messages             |
-| POST   | `/v1/messages/count_tokens`                   | Anthropic token count          |
-| POST   | `/v1/embeddings`                              | OpenAI embeddings              |
-| POST   | `/v1/images/generations`                      | OpenAI images                  |
-| POST   | `/v1/audio/speech`                            | OpenAI text-to-speech          |
-| POST   | `/v1/audio/transcriptions`                    | OpenAI transcription           |
-| POST   | `/v1/moderations`                             | OpenAI moderation              |
-| POST   | `/v1/rerank`                                  | Cohere-style rerank            |
-| POST   | `/v1/videos/generations`                      | Video generation               |
-| POST   | `/v1/music/generations`                       | Music generation               |
-| POST   | `/v1/search`                                  | Web search providers           |
-| GET    | `/v1/models`                                  | OpenAI model list              |
-| GET    | `/v1beta/models`                              | Gemini model list              |
-| POST   | `/v1beta/models/{model}:generateContent`      | Gemini                         |
-| POST   | `/v1/api/chat`                                | Ollama chat                    |
-| POST   | `/v1/providers/{provider}/chat/completions`   | OpenAI, pinned to one provider |
-| POST   | `/v1/providers/{provider}/embeddings`         | OpenAI, pinned to one provider |
-| POST   | `/v1/providers/{provider}/images/generations` | OpenAI, pinned to one provider |
+| Method | Path                                           | Format                         |
+| ------ | ---------------------------------------------- | ------------------------------ |
+| POST   | `/v1/chat/completions`                         | OpenAI Chat Completions        |
+| POST   | `/v1/completions`                              | OpenAI legacy completions      |
+| POST   | `/v1/responses`                                | OpenAI Responses               |
+| POST   | `/v1/messages`                                 | Anthropic Messages             |
+| POST   | `/v1/messages/count_tokens`                    | Anthropic token count          |
+| POST   | `/v1/embeddings`                               | OpenAI embeddings              |
+| POST   | `/v1/images/generations`                       | OpenAI images                  |
+| POST   | `/v1/audio/speech`                             | OpenAI text-to-speech          |
+| POST   | `/v1/audio/transcriptions`                     | OpenAI transcription           |
+| POST   | `/v1/moderations`                              | OpenAI moderation              |
+| POST   | `/v1/rerank`                                   | Cohere-style rerank            |
+| POST   | `/v1/videos/generations`                       | Video generation               |
+| POST   | `/v1/music/generations`                        | Music generation               |
+| POST   | `/v1/search`                                   | Web search providers           |
+| GET    | `/v1/models`                                   | OpenAI model list              |
+| GET    | `/v1beta/models`                               | Gemini model list              |
+| POST   | `/v1beta/models/{model}:generateContent`       | Gemini                         |
+| POST   | `/v1beta/models/{model}:streamGenerateContent` | Gemini, streaming              |
+| POST   | `/v1beta/models/{model}:countTokens`           | Gemini token estimate          |
+| POST   | `/v1/api/chat`                                 | Ollama chat                    |
+| GET    | `/api/tags`                                    | Ollama model list              |
+| POST   | `/v1/providers/{provider}/chat/completions`    | OpenAI, pinned to one provider |
+| POST   | `/v1/providers/{provider}/embeddings`          | OpenAI, pinned to one provider |
+| POST   | `/v1/providers/{provider}/images/generations`  | OpenAI, pinned to one provider |
 
-Streaming works everywhere the upstream format supports it (`"stream": true`, server-sent events).
+Every endpoint answers in the format of the API it mirrors, whatever provider serves the request: `/v1/messages` returns Anthropic messages, `/v1beta/...:generateContent` returns Gemini `candidates`, `/v1/responses` returns a Responses object, `/v1/api/chat` returns Ollama JSON lines.
+
+### Streaming
+
+Streaming follows each API's own rules:
+
+| Format                             | Streams when                                                                          |
+| ---------------------------------- | ------------------------------------------------------------------------------------- |
+| OpenAI Chat / Responses, Anthropic | `"stream": true`. Left out, you get one JSON response (as the official APIs do)       |
+| Gemini                             | You call `:streamGenerateContent` (add `?alt=sse` for server-sent events, as SDKs do) |
+| Ollama                             | By default; send `"stream": false` for a single JSON object                           |
+
+A request that leaves `stream` out but sends `Accept: text/event-stream` is also streamed.
+
+### Gemini format
+
+```bash
+curl "http://localhost:20128/v1beta/models/openai/gpt-4o-mini:generateContent" \
+  -H "x-goog-api-key: $COOL_ROUTER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"contents": [{"role": "user", "parts": [{"text": "Hello"}]}]}'
+```
+
+The model in the path is a Cool Router model name (`provider/model` or a combo), so a Gemini client can talk to any provider.
 
 ## Examples
 
@@ -110,7 +147,7 @@ curl http://localhost:20128/v1/audio/transcriptions \
 
 ## Errors
 
-Errors use the OpenAI shape:
+OpenAI-format endpoints use the OpenAI error shape:
 
 ```json
 {
@@ -121,6 +158,14 @@ Errors use the OpenAI shape:
   }
 }
 ```
+
+The other formats use their own, so their SDKs raise the right exception:
+
+| Format    | Error body                                                                       |
+| --------- | -------------------------------------------------------------------------------- |
+| Anthropic | `{"type": "error", "error": {"type": "authentication_error", "message": "..."}}` |
+| Gemini    | `{"error": {"code": 401, "message": "...", "status": "UNAUTHENTICATED"}}`        |
+| Ollama    | `{"error": "..."}`                                                               |
 
 | Status | Meaning                                                              |
 | ------ | -------------------------------------------------------------------- |

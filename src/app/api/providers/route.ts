@@ -40,9 +40,22 @@ export async function GET() {
 
 // POST /api/providers - Create new connection (API Key only, OAuth via separate flow)
 export async function POST(request: Request) {
+  let body;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
 
+  try {
     // Zod validation
     const validation = validateBody(createProviderSchema, body);
     if (isValidationFailure(validation)) {

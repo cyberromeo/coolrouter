@@ -5,6 +5,7 @@ https://github.com/cyberromeo/coolrouter/security/advisories rather than a publi
 
 Running Cool Router safely:
 
-- Change the dashboard password on first launch (Settings → Security).
+- Create the dashboard password in the first-run wizard (change it later in Settings → Security).
 - Keep `.env` private; it holds your encryption secrets.
 - Require API keys (`REQUIRE_API_KEY=true`) when the server is reachable from other machines.
+- The desktop app listens on localhost only unless you turn on **Allow Access from Other Devices** in the tray menu.

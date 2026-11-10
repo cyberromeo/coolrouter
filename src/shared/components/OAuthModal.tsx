@@ -6,6 +6,7 @@ import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 const GOOGLE_OAUTH_PROVIDERS = new Set(["antigravity", "gemini-cli"]);
 
@@ -38,7 +39,12 @@ export default function OAuthModal({
   const [isDeviceCode, setIsDeviceCode] = useState(false);
   const [deviceData, setDeviceData] = useState(null);
   const [polling, setPolling] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const popupRef = useRef(null);
+  // Every connection attempt gets its own id. Polling loops and late responses compare
+  // against it and stop once a newer attempt started (modal reopened, "Try Again"), the
+  // account got connected another way, or the modal was unmounted.
+  const flowIdRef = useRef(0);
   const { copied, copy } = useCopyToClipboard();
 
   // State for client-only values to avoid hydration mismatch
@@ -94,7 +100,7 @@ export default function OAuthModal({
           }),
         });
 
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
           const errorObject =
             typeof data.error === "object" && data.error !== null
@@ -115,6 +121,10 @@ export default function OAuthModal({
           throw new Error(details ? `${errMsg} (${details})` : errMsg);
         }
 
+        // Connected. A callback-server polling loop (Codex) may still be running for this
+        // attempt: stop it, or it times out minutes later and reports a failure.
+        flowIdRef.current += 1;
+        setPolling(false);
         setStep("success");
         onSuccess?.();
       } catch (err) {
@@ -142,12 +152,14 @@ export default function OAuthModal({
 
   // Poll for device code token
   const startPolling = useCallback(
-    async (deviceCode, codeVerifier, interval, extraData) => {
+    async (deviceCode, codeVerifier, interval, extraData, flowId) => {
+      const isStale = () => flowIdRef.current !== flowId;
       setPolling(true);
       const maxAttempts = 60;
 
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise((r) => setTimeout(r, interval * 1000));
+        if (isStale()) return;
 
         try {
           const res = await fetch(`/api/oauth/${provider}/poll`, {
@@ -156,13 +168,21 @@ export default function OAuthModal({
             body: JSON.stringify({ deviceCode, codeVerifier, extraData }),
           });
 
-          const data = await res.json();
+          const data = await res.json().catch(() => ({}));
+          if (isStale()) return;
 
           if (data.success) {
+            flowIdRef.current += 1;
             setStep("success");
             setPolling(false);
             onSuccess?.();
             return;
+          }
+
+          // Cool Router itself rejected the poll (session expired, invalid request).
+          // Retrying for five minutes cannot fix that, so say what is wrong now.
+          if (!res.ok && res.status < 500) {
+            throw new Error(getApiErrorMessage(data, "Authorization failed"));
           }
 
           if (data.error === "expired_token" || data.error === "access_denied") {
@@ -173,6 +193,7 @@ export default function OAuthModal({
             interval = Math.min(interval + 5, 30);
           }
         } catch (err) {
+          if (isStale()) return;
           setError(err.message);
           setStep("error");
           setPolling(false);
@@ -180,6 +201,7 @@ export default function OAuthModal({
         }
       }
 
+      if (isStale()) return;
       setError("Authorization timeout");
       setStep("error");
       setPolling(false);
@@ -190,8 +212,14 @@ export default function OAuthModal({
   // Start OAuth flow
   const startOAuthFlow = useCallback(async () => {
     if (!provider) return;
+    const flowId = ++flowIdRef.current;
+    const isStale = () => flowIdRef.current !== flowId;
+    // The previous attempt's (closed) popup must not make the "popup was closed" watcher
+    // flip this attempt to manual input before its own popup even opened.
+    popupRef.current = null;
     try {
       setError(null);
+      setPolling(false);
 
       // Device code flow (GitHub, Qwen, Kiro, Kimi Coding, KiloCode)
       if (
@@ -205,14 +233,10 @@ export default function OAuthModal({
         setStep("waiting");
 
         const res = await fetch(`/api/oauth/${provider}/device-code`);
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        if (isStale()) return;
         if (!res.ok) {
-          const errMsg =
-            typeof data.error === "object" && data.error !== null
-              ? ((data.error as Record<string, unknown>).message as string) ||
-                JSON.stringify(data.error)
-              : data.error || "Request failed";
-          throw new Error(errMsg);
+          throw new Error(getApiErrorMessage(data, "Request failed"));
         }
 
         setDeviceData(data);
@@ -226,9 +250,11 @@ export default function OAuthModal({
           provider === "kiro"
             ? { _clientId: data._clientId, _clientSecret: data._clientSecret }
             : null;
-        startPolling(data.device_code, data.codeVerifier, data.interval || 5, extraData);
+        startPolling(data.device_code, data.codeVerifier, data.interval || 5, extraData, flowId);
         return;
       }
+
+      setIsDeviceCode(false);
 
       let forceManual = false;
 
@@ -244,53 +270,76 @@ export default function OAuthModal({
       if (provider === "codex") {
         if (isLocalhost) {
           // Localhost: use callback server on port 1455 + polling
+          let serverData = null;
           try {
             const serverRes = await fetch(`/api/oauth/codex/start-callback-server`);
-            const serverData = await serverRes.json();
-            if (!serverRes.ok) throw new Error(serverData.error);
+            const payload = await serverRes.json().catch(() => ({}));
+            if (!serverRes.ok) {
+              throw new Error(getApiErrorMessage(payload, "Could not start the callback server"));
+            }
+            serverData = payload;
+          } catch (codexErr) {
+            // Port 1455 busy, etc.: the paste-the-URL flow below still works.
+            console.warn(
+              "Codex callback server failed, falling back to standard manual flow",
+              codexErr
+            );
+            forceManual = true;
+          }
+          if (isStale()) return;
 
+          if (serverData) {
             setAuthData({ ...serverData, redirectUri: serverData.redirectUri });
             setStep("waiting");
             popupRef.current = window.open(serverData.authUrl, "oauth_auth");
 
-            // If browser blocked the popup, switch to manual input step immediately
+            // If the browser blocked the popup (or this is the desktop app, which hands the
+            // URL to the system browser), switch to the manual input step immediately
             if (!popupRef.current) {
               setStep("input");
             }
 
             setPolling(true);
-            const maxAttempts = 150;
-            for (let i = 0; i < maxAttempts; i++) {
-              await new Promise((r) => setTimeout(r, 2000));
+            try {
+              const maxAttempts = 150;
+              for (let i = 0; i < maxAttempts; i++) {
+                await new Promise((r) => setTimeout(r, 2000));
+                if (isStale()) return;
 
-              const pollRes = await fetch(`/api/oauth/codex/poll-callback`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({}),
-              });
-              const pollData = await pollRes.json();
+                const pollRes = await fetch(`/api/oauth/codex/poll-callback`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({}),
+                });
+                const pollData = await pollRes.json().catch(() => ({}));
+                if (isStale()) return;
 
-              if (pollData.success) {
-                setStep("success");
-                setPolling(false);
-                onSuccess?.();
-                return;
+                if (pollData.success) {
+                  flowIdRef.current += 1;
+                  setStep("success");
+                  setPolling(false);
+                  onSuccess?.();
+                  return;
+                }
+
+                if (pollData.error && !pollData.pending) {
+                  throw new Error(
+                    pollData.errorDescription ||
+                      getApiErrorMessage(pollData, "Authorization failed")
+                  );
+                }
               }
-
-              if (pollData.error && !pollData.pending) {
-                throw new Error(pollData.errorDescription || pollData.error);
-              }
+              throw new Error("Authorization timeout");
+            } catch (pollErr) {
+              // The authorization itself failed (denied, token exchange error, timeout).
+              // Show that — silently starting a second authorization in a new tab, minutes
+              // later and possibly after the dialog was closed, only hid the reason.
+              if (isStale()) return;
+              setPolling(false);
+              setError(pollErr?.message || "Authorization failed");
+              setStep("error");
+              return;
             }
-
-            setPolling(false);
-            throw new Error("Authorization timeout");
-          } catch (codexErr) {
-            console.warn(
-              "Codex callback server failed, falling back to standard manual flow",
-              codexErr
-            );
-            setPolling(false);
-            forceManual = true;
           }
         }
         // Remote: fall through to standard auth code flow below
@@ -329,20 +378,18 @@ export default function OAuthModal({
       const res = await fetch(
         `/api/oauth/${provider}/authorize?redirect_uri=${encodeURIComponent(redirectUri)}`
       );
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
+      if (isStale()) return;
       if (!res.ok) {
-        const errMsg =
-          typeof data.error === "object" && data.error !== null
-            ? ((data.error as Record<string, unknown>).message as string) ||
-              JSON.stringify(data.error)
-            : data.error || "Authorization failed";
-        throw new Error(errMsg);
+        throw new Error(getApiErrorMessage(data, "Authorization failed"));
       }
 
       if (!data.authUrl) {
         throw new Error(
-          data.error ||
+          getApiErrorMessage(
+            data,
             "Browser OAuth is unavailable for this provider in the current environment. Use the supported auth method instead."
+          )
         );
       }
 
@@ -363,10 +410,20 @@ export default function OAuthModal({
         }
       }
     } catch (err) {
+      if (isStale()) return;
       setError(err.message);
       setStep("error");
     }
   }, [provider, isLocalhost, isTrueLocalhost, startPolling, onSuccess]);
+
+  // Unmounted (page navigation, the Kiro wrapper going back to method selection):
+  // stop polling loops instead of letting them run for minutes against a dead dialog.
+  useEffect(() => {
+    return () => {
+      flowIdRef.current += 1;
+      flowStartedRef.current = false;
+    };
+  }, []);
 
   // Reset guard when modal closes
   useEffect(() => {
@@ -380,12 +437,16 @@ export default function OAuthModal({
     if (isOpen && provider) {
       if (flowStartedRef.current) return; // Already started, prevent duplicate
       flowStartedRef.current = true;
+      // The dialog stays mounted between uses: without this the previous attempt's
+      // "Connected Successfully!" / "Connection Failed" screen shows until the new one loads.
+      setStep("waiting");
       setAuthData(null);
       setCallbackUrl("");
       setError(null);
       setIsDeviceCode(false);
       setDeviceData(null);
       setPolling(false);
+      setSubmitting(false);
       // Auto start OAuth
       startOAuthFlow();
     }
@@ -434,7 +495,21 @@ export default function OAuthModal({
     let channel;
     try {
       channel = new BroadcastChannel("oauth_callback");
-      channel.onmessage = (event) => handleCallback(event.data);
+      channel.onmessage = (event) => {
+        const data = event.data;
+        // Another dashboard tab's acknowledgement (see below) is not a callback.
+        if (!data || data.type === "oauth_callback_ack") return;
+        // Tell the callback tab the dashboard has the result, so it can say "close this
+        // tab" instead of asking the user to copy the URL over by hand.
+        if (data.code || data.error) {
+          try {
+            channel.postMessage({ type: "oauth_callback_ack" });
+          } catch {
+            /* channel already closed */
+          }
+        }
+        handleCallback(data);
+      };
     } catch (e) {
       console.log("BroadcastChannel not supported");
     }
@@ -521,6 +596,10 @@ export default function OAuthModal({
 
   // Handle manual URL input
   const handleManualSubmit = async () => {
+    // A double click would exchange the single-use code twice: the second attempt fails
+    // and replaces the success screen with "Connection Failed".
+    if (submitting) return;
+    setSubmitting(true);
     try {
       setError(null);
 
@@ -563,6 +642,8 @@ export default function OAuthModal({
     } catch (err) {
       setError(err.message);
       setStep("error");
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -593,6 +674,19 @@ export default function OAuthModal({
           </div>
         )}
 
+        {/* Device Code Flow - requesting the code (was a blank dialog) */}
+        {step === "waiting" && isDeviceCode && !deviceData && (
+          <div
+            className="flex items-center justify-center gap-2 py-8 text-sm text-text-muted"
+            role="status"
+          >
+            <span className="material-symbols-outlined animate-spin" aria-hidden="true">
+              progress_activity
+            </span>
+            Requesting a device code...
+          </div>
+        )}
+
         {/* Device Code Flow - Waiting */}
         {step === "waiting" && isDeviceCode && deviceData && (
           <>
@@ -603,12 +697,21 @@ export default function OAuthModal({
               <div className="bg-sidebar p-4 rounded-lg mb-4">
                 <p className="text-xs text-text-muted mb-1">Verification URL</p>
                 <div className="flex items-center gap-2">
-                  <code className="flex-1 text-sm break-all">{deviceData.verification_uri}</code>
+                  {/* A real link: the automatic window.open above is often popup-blocked. */}
+                  <a
+                    href={deviceData.verification_uri_complete || deviceData.verification_uri}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex-1 text-sm font-mono break-all underline underline-offset-2 hover:text-primary"
+                  >
+                    {deviceData.verification_uri}
+                  </a>
                   <Button
                     size="sm"
                     variant="ghost"
                     icon={copied === "verify_url" ? "check" : "content_copy"}
                     onClick={() => copy(deviceData.verification_uri, "verify_url")}
+                    aria-label="Copy verification URL"
                   />
                 </div>
               </div>
@@ -623,6 +726,7 @@ export default function OAuthModal({
                     variant="ghost"
                     icon={copied === "user_code" ? "check" : "content_copy"}
                     onClick={() => copy(deviceData.user_code, "user_code")}
+                    aria-label="Copy code"
                   />
                 </div>
               </div>
@@ -642,7 +746,7 @@ export default function OAuthModal({
             <div className="space-y-4">
               {/* Remote/LAN server info for Google OAuth providers */}
               {!isTrueLocalhost && GOOGLE_OAUTH_PROVIDERS.has(provider) && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-800 dark:text-amber-200">
                   <span className="material-symbols-outlined text-sm align-middle mr-1">
                     warning
                   </span>
@@ -663,7 +767,7 @@ export default function OAuthModal({
               )}
               {/* Generic remote info for other providers */}
               {!isTrueLocalhost && !GOOGLE_OAUTH_PROVIDERS.has(provider) && (
-                <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-200">
+                <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-xs text-blue-800 dark:text-blue-200">
                   <span className="material-symbols-outlined text-sm align-middle mr-1">info</span>
                   <strong>Remote access:</strong> Since you&apos;re accessing Cool Router remotely,
                   after authorizing you&apos;ll see an error page (localhost not found). That&apos;s
@@ -712,7 +816,12 @@ export default function OAuthModal({
             </div>
 
             <div className="flex gap-2">
-              <Button onClick={handleManualSubmit} fullWidth disabled={!callbackUrl || !authData}>
+              <Button
+                onClick={handleManualSubmit}
+                fullWidth
+                loading={submitting}
+                disabled={!callbackUrl.trim() || !authData}
+              >
                 Connect
               </Button>
               <Button onClick={onClose} variant="ghost" fullWidth>

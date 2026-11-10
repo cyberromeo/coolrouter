@@ -1,6 +1,7 @@
 import { CORS_HEADERS } from "@/shared/utils/cors";
 import { v1CountTokensSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import { buildClaudeErrorBody } from "@coolrouter/open-sse/utils/error.ts";
 
 /**
  * Handle CORS preflight
@@ -11,13 +12,14 @@ export async function OPTIONS() {
 
 /**
  * POST /v1/messages/count_tokens - Mock token count response
+ * (errors use the Anthropic shape, like /v1/messages)
  */
 export async function POST(request) {
   let rawBody;
   try {
     rawBody = await request.json();
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid JSON body" }), {
+    return new Response(JSON.stringify(buildClaudeErrorBody(400, "Invalid JSON body")), {
       status: 400,
       headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });
@@ -25,7 +27,11 @@ export async function POST(request) {
 
   const validation = validateBody(v1CountTokensSchema, rawBody);
   if (isValidationFailure(validation)) {
-    return new Response(JSON.stringify({ error: validation.error }), {
+    const details = validation.error.details
+      .map((detail) => (detail.field ? `${detail.field}: ${detail.message}` : detail.message))
+      .join("; ");
+    const message = details ? `${validation.error.message}: ${details}` : validation.error.message;
+    return new Response(JSON.stringify(buildClaudeErrorBody(400, message)), {
       status: 400,
       headers: { "Content-Type": "application/json", ...CORS_HEADERS },
     });

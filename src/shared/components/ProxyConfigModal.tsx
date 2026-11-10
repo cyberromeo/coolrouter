@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import PropTypes from "prop-types";
 import Modal from "./Modal";
 import Button from "./Button";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 const ALL_PROXY_TYPES = [
   { value: "http", label: "HTTP" },
@@ -76,12 +77,17 @@ export default function ProxyConfigModal({
     if (!isOpen) return;
     setTestResult(null);
     setFormError(null);
+    setInheritedFrom(null);
     setLoading(true);
+    // Reopened for another provider/key before the first load finished: the slower answer
+    // must not fill this target's form with the other one's proxy.
+    let cancelled = false;
 
     const loadProxy = async () => {
       try {
         let hasSavedAssignment = false;
         const registryRes = await fetch("/api/settings/proxies");
+        if (cancelled) return;
         if (registryRes.ok) {
           const registryPayload = await registryRes.json();
           setSavedProxies(Array.isArray(registryPayload?.items) ? registryPayload.items : []);
@@ -95,6 +101,7 @@ export default function ProxyConfigModal({
           assignmentParams.set("scopeId", levelId);
         }
         const assignmentRes = await fetch(`/api/settings/proxies/assignments?${assignmentParams}`);
+        if (cancelled) return;
         if (assignmentRes.ok) {
           const assignmentPayload = await assignmentRes.json();
           const items = Array.isArray(assignmentPayload?.items) ? assignmentPayload.items : [];
@@ -114,6 +121,7 @@ export default function ProxyConfigModal({
         const params = new URLSearchParams({ level });
         if (levelId) params.set("id", levelId);
         const res = await fetch(`/api/settings/proxy?${params}`);
+        if (cancelled) return;
         if (res.ok) {
           const data = await res.json();
           const proxy = data.proxy;
@@ -122,7 +130,8 @@ export default function ProxyConfigModal({
             const hasTypeOption = PROXY_TYPES.some((entry) => entry.value === normalizedType);
             setProxyType(hasTypeOption ? normalizedType : PROXY_TYPES[0]?.value || "http");
             setHost(proxy.host || "");
-            setPort(proxy.port || "");
+            // The API stores the port as a number; the form calls port.trim() on save/test.
+            setPort(proxy.port != null ? String(proxy.port) : "");
             setUsername(proxy.username || "");
             setPassword(proxy.password || "");
             setShowAuth(!!(proxy.username || proxy.password));
@@ -145,6 +154,7 @@ export default function ProxyConfigModal({
         if (level !== "global" && levelId) {
           // Try to resolve the effective proxy to show inheritance info
           const fullConfig = await fetch("/api/settings/proxy");
+          if (cancelled) return;
           if (fullConfig.ok) {
             const config = await fullConfig.json();
             // Determine inheritance source
@@ -162,11 +172,14 @@ export default function ProxyConfigModal({
       } catch (error) {
         console.error("Error loading proxy config:", error);
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     };
 
     loadProxy();
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen, level, levelId]);
 
   const resetFields = () => {
@@ -207,37 +220,42 @@ export default function ProxyConfigModal({
           await fetch(`/api/settings/proxy?${clearParams.toString()}`, { method: "DELETE" });
         }
       } else {
-        const clearAssignmentRes = await fetch("/api/settings/proxies/assignments", {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            scope,
-            scopeId: level === "global" ? null : levelId,
-            proxyId: null,
-          }),
-        });
-        const clearAssignmentPayload = await clearAssignmentRes.json().catch(() => ({}));
-        if (!clearAssignmentRes.ok) {
-          setFormError(clearAssignmentPayload?.error?.message || "Failed to clear saved proxy");
-          return;
-        }
-
         const proxy = {
           type: proxyType,
           host: host.trim(),
-          port: port.trim() || getDefaultPort(proxyType),
+          port: String(port).trim() || getDefaultPort(proxyType),
           username: username.trim(),
           password: password.trim(),
         };
+        // Save the custom proxy first and only then drop the saved-proxy assignment. The
+        // other way round, a rejected custom proxy (bad port, …) left the target with no
+        // proxy at all while the dialog only showed a validation error.
         res = await fetch("/api/settings/proxy", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ level, id: levelId, proxy }),
         });
+
+        if (res.ok) {
+          const clearAssignmentRes = await fetch("/api/settings/proxies/assignments", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              scope,
+              scopeId: level === "global" ? null : levelId,
+              proxyId: null,
+            }),
+          });
+          if (!clearAssignmentRes.ok) {
+            const clearAssignmentPayload = await clearAssignmentRes.json().catch(() => ({}));
+            setFormError(getApiErrorMessage(clearAssignmentPayload, "Failed to clear saved proxy"));
+            return;
+          }
+        }
       }
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setFormError(payload?.error?.message || "Failed to save proxy configuration");
+        setFormError(getApiErrorMessage(payload, "Failed to save proxy configuration"));
         return;
       }
       setHasOwnProxy(true);
@@ -274,7 +292,7 @@ export default function ProxyConfigModal({
       const res = await fetch(`/api/settings/proxy?${params}`, { method: "DELETE" });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setFormError(payload?.error?.message || "Failed to clear proxy configuration");
+        setFormError(getApiErrorMessage(payload, "Failed to clear proxy configuration"));
         return;
       }
       resetFields();
@@ -329,7 +347,7 @@ export default function ProxyConfigModal({
         proxy = {
           type: proxyType,
           host: host.trim(),
-          port: port.trim() || getDefaultPort(proxyType),
+          port: String(port).trim() || getDefaultPort(proxyType),
           username: username.trim(),
           password: password.trim(),
         };
@@ -338,11 +356,13 @@ export default function ProxyConfigModal({
       const res = await fetch("/api/settings/proxy/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ proxy }),
+        // The saved-proxy list only carries redacted credentials: pass the id so the server
+        // tests with the real username/password instead of none (which fails with 407).
+        body: JSON.stringify(mode === "saved" ? { proxy, proxyId: selectedProxyId } : { proxy }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const message = data?.error?.message || "Connection failed";
+        const message = getApiErrorMessage(data, "Connection failed");
         setTestResult({ success: false, error: message });
         setFormError(message);
         return;
@@ -372,10 +392,10 @@ export default function ProxyConfigModal({
           {/* Inheritance indicator */}
           {level !== "global" && !hasOwnProxy && inheritedFrom && (
             <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20 text-sm">
-              <span className="material-symbols-outlined text-blue-400 text-base">
+              <span className="material-symbols-outlined text-blue-600 dark:text-blue-400 text-base">
                 subdirectory_arrow_right
               </span>
-              <span className="text-blue-300">
+              <span className="text-blue-800 dark:text-blue-300">
                 Inheriting from <strong>{inheritedFrom.level}</strong>: {inheritedFrom.proxy?.type}
                 ://{inheritedFrom.proxy?.host}:{inheritedFrom.proxy?.port}
               </span>
@@ -527,7 +547,7 @@ export default function ProxyConfigModal({
 
           {/* Test Result */}
           {formError && (
-            <div className="px-4 py-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-400">
+            <div className="px-4 py-3 rounded-lg border border-red-500/30 bg-red-500/10 text-sm text-red-700 dark:text-red-400">
               {formError}
             </div>
           )}
@@ -542,7 +562,9 @@ export default function ProxyConfigModal({
             >
               <span
                 className={`material-symbols-outlined text-xl ${
-                  testResult.success ? "text-emerald-400" : "text-red-400"
+                  testResult.success
+                    ? "text-emerald-600 dark:text-emerald-400"
+                    : "text-red-600 dark:text-red-400"
                 }`}
               >
                 {testResult.success ? "check_circle" : "error"}
@@ -550,14 +572,19 @@ export default function ProxyConfigModal({
               <div className="flex-1">
                 {testResult.success ? (
                   <div>
-                    <span className="text-sm font-medium text-emerald-400">Connected</span>
+                    <span className="text-sm font-medium text-emerald-700 dark:text-emerald-400">
+                      Connected
+                    </span>
                     <span className="text-text-muted text-xs ml-2">
-                      IP: <span className="font-mono text-emerald-300">{testResult.publicIp}</span>
+                      IP:{" "}
+                      <span className="font-mono text-emerald-700 dark:text-emerald-300">
+                        {testResult.publicIp}
+                      </span>
                       {testResult.latencyMs && ` · ${testResult.latencyMs}ms`}
                     </span>
                   </div>
                 ) : (
-                  <div className="text-sm text-red-400">
+                  <div className="text-sm text-red-700 dark:text-red-400">
                     {testResult.error || "Connection failed"}
                     {testResult.latencyMs && (
                       <span className="text-text-muted text-xs ml-2">

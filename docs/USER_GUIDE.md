@@ -76,7 +76,7 @@ Every request with time, status, model, provider, account, API key, combo, token
 | Tab      | What's there                                                                                 |
 | -------- | -------------------------------------------------------------------------------------------- |
 | General  | Light/dark/system theme, accent colour, sidebar items, language, storage, backup and restore |
-| Security | Dashboard password, require login, IP allow/deny lists, sessions                             |
+| Security | Dashboard password, require login, blocked providers, sessions                               |
 | Routing  | Default routing strategy, combo defaults, model aliases, fallback chains                     |
 | Advanced | Upstream HTTP/SOCKS proxy for provider traffic                                               |
 

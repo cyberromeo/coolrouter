@@ -48,7 +48,7 @@ Generated automatically on first install. Keep them stable: changing `STORAGE_EN
 | Variable                     | Default | What it does                                |
 | ---------------------------- | ------- | ------------------------------------------- |
 | `APP_LOG_LEVEL`              | `info`  | `debug`, `info`, `warn` or `error`          |
-| `APP_LOG_TO_FILE`            | `false` | Also write logs to `DATA_DIR/logs`          |
+| `APP_LOG_TO_FILE`            | `true`  | Write logs to `logs/application/app.log`    |
 | `CALL_LOG_RETENTION_DAYS`    | `90`    | How long request logs are kept              |
 | `CALL_LOG_MAX_ENTRIES`       | `10000` | Cap on stored request logs                  |
 | `SQLITE_MAX_SIZE_MB`         | `2048`  | Database size warning threshold             |

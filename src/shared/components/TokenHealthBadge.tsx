@@ -50,10 +50,14 @@ export default function TokenHealthBadge() {
       className="relative"
       onMouseEnter={() => setShowTooltip(true)}
       onMouseLeave={() => setShowTooltip(false)}
+      onFocus={() => setShowTooltip(true)}
+      onBlur={() => setShowTooltip(false)}
     >
       <button
+        type="button"
         className="flex items-center gap-1 px-2 py-1.5 rounded-lg hover:bg-surface/30 transition-colors"
         title={status.tooltip}
+        aria-label={status.tooltip}
       >
         <span className="material-symbols-outlined text-[18px]" style={{ color: status.color }}>
           {status.icon}
@@ -66,14 +70,9 @@ export default function TokenHealthBadge() {
       </button>
 
       {showTooltip && (
-        <div
-          className="absolute top-full right-0 mt-1 z-50 min-w-[200px] p-3 rounded-lg shadow-lg"
-          style={{
-            background: "rgba(15, 15, 25, 0.95)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            backdropFilter: "blur(12px)",
-          }}
-        >
+        // Theme surface, not a hard-coded dark panel: the text inside uses the theme's text
+        // colours, which are dark-on-dark (unreadable) in the light theme otherwise.
+        <div className="absolute top-full right-0 mt-1 z-50 min-w-[200px] p-3 rounded-lg shadow-lg bg-surface border border-border">
           <p className="text-xs font-medium text-text-main mb-2">{t("tokenHealth")}</p>
           <div className="flex flex-col gap-1 text-xs">
             <div className="flex justify-between">
@@ -81,23 +80,23 @@ export default function TokenHealthBadge() {
               <span className="text-text-main">{health.total}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-emerald-400">{t("healthy")}</span>
+              <span className="text-emerald-600 dark:text-emerald-400">{t("healthy")}</span>
               <span className="text-text-main">{health.healthy}</span>
             </div>
             {health.errored > 0 && (
               <div className="flex justify-between">
-                <span className="text-red-400">{t("errored")}</span>
+                <span className="text-red-600 dark:text-red-400">{t("errored")}</span>
                 <span className="text-text-main">{health.errored}</span>
               </div>
             )}
             {health.warning > 0 && (
               <div className="flex justify-between">
-                <span className="text-amber-400">{t("warning")}</span>
+                <span className="text-amber-600 dark:text-amber-400">{t("warning")}</span>
                 <span className="text-text-main">{health.warning}</span>
               </div>
             )}
             {health.lastCheckAt && (
-              <div className="flex justify-between mt-1 pt-1 border-t border-white/5">
+              <div className="flex justify-between gap-3 mt-1 pt-1 border-t border-border">
                 <span className="text-text-muted">{t("lastCheck")}</span>
                 <span className="text-text-muted">
                   {new Date(health.lastCheckAt).toLocaleTimeString()}

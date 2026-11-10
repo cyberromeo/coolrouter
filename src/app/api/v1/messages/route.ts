@@ -1,6 +1,8 @@
 import { CORS_ORIGIN } from "@/shared/utils/cors";
 import { handleChat } from "@/sse/handlers/chat";
+import { withAnthropicApiKeyAsBearer } from "@/sse/services/auth";
 import { initTranslators } from "@coolrouter/open-sse/translator/index.ts";
+import { toClaudeErrorResponse } from "@coolrouter/open-sse/utils/error.ts";
 
 let initialized = false;
 
@@ -30,8 +32,12 @@ export async function OPTIONS() {
 
 /**
  * POST /v1/messages - Claude format (auto convert via handleChat)
+ *
+ * Errors are returned in the Anthropic shape:
+ * `{ "type": "error", "error": { "type": "...", "message": "..." } }`
  */
 export async function POST(request) {
   await ensureInitialized();
-  return await handleChat(request);
+  const response = await handleChat(await withAnthropicApiKeyAsBearer(request));
+  return await toClaudeErrorResponse(response);
 }

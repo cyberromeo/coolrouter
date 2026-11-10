@@ -13,9 +13,12 @@ export async function GET() {
     const oauthConns = (connections || []).filter((c) => c.isActive && c.refreshToken);
 
     const total = oauthConns.length;
-    const healthy = oauthConns.filter((c) => c.testStatus === "active" || !c.lastError).length;
-    const errored = oauthConns.filter(
-      (c) => c.testStatus === "error" || c.lastErrorType === "token_refresh_failed"
+    const isErrored = (c) => c.testStatus === "error" || c.lastErrorType === "token_refresh_failed";
+    const errored = oauthConns.filter(isErrored).length;
+    // Mutually exclusive buckets: a connection that is both "active" and failing its
+    // refresh used to land in both, which made `warning` negative.
+    const healthy = oauthConns.filter(
+      (c) => !isErrored(c) && (c.testStatus === "active" || !c.lastError)
     ).length;
     const lastCheck = oauthConns.reduce((latest, c) => {
       if (!c.lastHealthCheckAt) return latest;

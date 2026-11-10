@@ -113,6 +113,10 @@ let _stmtValidateKey: ApiKeysStatements["validateKey"] | null = null;
 let _stmtGetKeyMetadata: ApiKeysStatements["getKeyMetadata"] | null = null;
 let _stmtInsertKey: ApiKeysStatements["insertKey"] | null = null;
 let _stmtDeleteKey: ApiKeysStatements["deleteKey"] | null = null;
+// Connection the statements above were prepared on. A restore/import swaps the singleton,
+// and only the server bundle that ran it gets resetApiKeyState(): the proxy middleware and
+// instrumentation bundles hold their own copy of this module, so detect the swap here too.
+let _stmtDb: ApiKeysDbLike | null = null;
 
 /**
  * Clear all caches (called on key create/update/delete)
@@ -215,6 +219,11 @@ function ensureApiKeysColumns(db: ApiKeysDbLike) {
  * Initialize prepared statements (lazy initialization)
  */
 function getPreparedStatements(db: ApiKeysDbLike): ApiKeysStatements {
+  if (_stmtDb !== db) {
+    // Statements bound to a closed connection throw "The database connection is not open"
+    clearPreparedStatementCache();
+    _stmtDb = db;
+  }
   ensureApiKeysColumns(db);
 
   if (

@@ -14,6 +14,12 @@ import {
   type HideableSidebarItemId,
 } from "@/shared/constants/sidebarVisibility";
 
+// The image is stored as a base64 data URL, and the settings API caps that string
+// (customLogoBase64: 100,000 chars, customFaviconBase64: 50,000 chars). Base64 adds a third,
+// so larger files than these were accepted here and then rejected by the save — silently.
+const MAX_LOGO_FILE_BYTES = 70 * 1024;
+const MAX_FAVICON_FILE_BYTES = 35 * 1024;
+
 export default function AppearanceTab() {
   const { theme, setTheme, isDark } = useTheme();
   const { colorTheme, customColor, setColorTheme, setCustomColorTheme } = useThemeStore();
@@ -71,7 +77,11 @@ export default function AppearanceTab() {
       .catch(() => setLoading(false));
   }, []);
 
-  const updateSetting = async (key: string, value: any) => {
+  // `optimistic` is for the text fields: they save on every keystroke, and waiting for the
+  // response before updating the controlled input made it snap back to the old value —
+  // typing quickly dropped characters, and the app name could not be cleared at all.
+  const updateSetting = async (key: string, value: any, { optimistic = false } = {}) => {
+    if (optimistic) setSettings((prev) => ({ ...prev, [key]: value }));
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
@@ -79,11 +89,14 @@ export default function AppearanceTab() {
         body: JSON.stringify({ [key]: value }),
       });
       if (res.ok) {
-        setSettings((prev) => ({
-          ...prev,
-          [key]:
-            key === HIDDEN_SIDEBAR_ITEMS_SETTING_KEY ? normalizeHiddenSidebarItems(value) : value,
-        }));
+        // Skip for optimistic fields: a slower, older response must not overwrite newer text.
+        if (!optimistic) {
+          setSettings((prev) => ({
+            ...prev,
+            [key]:
+              key === HIDDEN_SIDEBAR_ITEMS_SETTING_KEY ? normalizeHiddenSidebarItems(value) : value,
+          }));
+        }
         if (typeof window !== "undefined") {
           window.dispatchEvent(
             new CustomEvent(SIDEBAR_SETTINGS_UPDATED_EVENT, {
@@ -305,8 +318,10 @@ export default function AppearanceTab() {
               </div>
               <input
                 type="text"
-                value={settings.instanceName || "Cool Router"}
-                onChange={(e) => updateSetting("instanceName", e.target.value)}
+                value={settings.instanceName ?? ""}
+                onChange={(e) =>
+                  updateSetting("instanceName", e.target.value, { optimistic: true })
+                }
                 placeholder="Cool Router"
                 maxLength={100}
                 className="h-10 px-3 rounded-lg bg-surface border border-border text-sm text-text-main focus:outline-none focus:border-primary w-48"
@@ -322,7 +337,9 @@ export default function AppearanceTab() {
                 <input
                   type="text"
                   value={settings.customLogoUrl || ""}
-                  onChange={(e) => updateSetting("customLogoUrl", e.target.value)}
+                  onChange={(e) =>
+                    updateSetting("customLogoUrl", e.target.value, { optimistic: true })
+                  }
                   className="flex-1 h-10 px-3 rounded-lg bg-surface border border-border text-sm text-text-main focus:outline-none focus:border-primary"
                   placeholder="https://example.com/logo.png"
                   maxLength={2000}
@@ -350,8 +367,8 @@ export default function AppearanceTab() {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        if (file.size > 500 * 1024) {
-                          setUploadError("Logo file must be less than 500KB");
+                        if (file.size > MAX_LOGO_FILE_BYTES) {
+                          setUploadError("Logo file must be less than 70KB");
                           return;
                         }
                         const validTypes = [
@@ -416,7 +433,9 @@ export default function AppearanceTab() {
                 <input
                   type="text"
                   value={settings.customFaviconUrl || ""}
-                  onChange={(e) => updateSetting("customFaviconUrl", e.target.value)}
+                  onChange={(e) =>
+                    updateSetting("customFaviconUrl", e.target.value, { optimistic: true })
+                  }
                   className="flex-1 h-10 px-3 rounded-lg bg-surface border border-border text-sm text-text-main focus:outline-none focus:border-primary"
                   placeholder="https://example.com/favicon.ico"
                   maxLength={2000}
@@ -444,8 +463,8 @@ export default function AppearanceTab() {
                     onChange={(e) => {
                       const file = e.target.files?.[0];
                       if (file) {
-                        if (file.size > 50 * 1024) {
-                          setUploadError("Favicon file must be less than 50KB");
+                        if (file.size > MAX_FAVICON_FILE_BYTES) {
+                          setUploadError("Favicon file must be less than 35KB");
                           return;
                         }
                         const validTypes = [

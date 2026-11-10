@@ -5,6 +5,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -84,12 +85,32 @@ function ensurePackage(pkgPath, sourcePath) {
 }
 
 function removeGeneratedElectronArtifacts() {
-  const generatedDirs = [
-    join(ELECTRON_STANDALONE_DIR, "electron", "dist-electron"),
-  ];
+  const generatedDirs = [join(ELECTRON_STANDALONE_DIR, "electron", "dist-electron")];
 
   for (const dir of generatedDirs) {
     rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Next copies every env file it loaded during `next build` into the standalone output.
+ * On a build machine that is the `.env` that `npm install` generated — complete with a
+ * JWT secret and encryption keys — and it would ship inside every installer. The desktop
+ * app generates its own per-install secrets (electron/main.js), so nothing needs these.
+ *
+ * File tracing also drags in repo-only folders that the server never reads at runtime.
+ */
+function removeBuildMachineFiles() {
+  for (const entry of readdirSync(ELECTRON_STANDALONE_DIR)) {
+    if (entry === ".env" || entry.startsWith(".env.")) {
+      rmSync(join(ELECTRON_STANDALONE_DIR, entry), { force: true });
+      console.log(`[electron] removed ${entry} from the bundle`);
+    }
+  }
+
+  // "logs" is the build machine's own application log when the app was run from the checkout.
+  for (const dir of ["tests", "electron", "logs", ".github", ".husky", ".vscode", "coverage"]) {
+    rmSync(join(ELECTRON_STANDALONE_DIR, dir), { recursive: true, force: true });
   }
 }
 
@@ -142,6 +163,7 @@ if (existsSync(PUBLIC_SRC)) {
 }
 
 removeGeneratedElectronArtifacts();
+removeBuildMachineFiles();
 
 ensurePackage(
   join(ELECTRON_STANDALONE_DIR, "node_modules", "@swc", "helpers"),

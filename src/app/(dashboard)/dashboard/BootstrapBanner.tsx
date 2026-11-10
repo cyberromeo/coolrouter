@@ -3,45 +3,59 @@
 import { useState } from "react";
 
 /**
- * Shown when Cool Router was started with auto-generated secrets (zero-config mode).
- * The banner is dismissable and persists only for the current session.
+ * Shown on the launch where Cool Router generated its own secrets (no JWT secret or
+ * encryption key was configured). It is information, not a warning: nothing is wrong and
+ * nothing needs doing, but the file it names must travel with the database.
+ * Dismissable; shown only for the current session.
+ *
+ * `envFilePath` is resolved by the server (it knows the real data folder on every
+ * platform, including Docker and a custom DATA_DIR); the browser cannot guess it.
  */
-export default function BootstrapBanner() {
+export default function BootstrapBanner({ envFilePath }: { envFilePath?: string }) {
   const [dismissed, setDismissed] = useState(false);
 
   if (dismissed) return null;
 
-  // Determine default data dir hint based on platform hint from user-agent
-  const dataDir =
-    typeof navigator !== "undefined" && navigator.platform?.startsWith("Win")
-      ? "%APPDATA%\\coolrouter\\server.env"
-      : "~/.coolrouter/server.env";
-
   return (
     <div
-      role="alert"
-      className="flex items-start gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-200 mb-4"
+      role="status"
+      className="mb-4 flex items-start gap-3 rounded-lg border border-border bg-surface px-4 py-3 text-sm"
     >
-      <span className="text-amber-400 text-base shrink-0 mt-0.5">⚠️</span>
-      <div className="flex-1 min-w-0">
-        <p className="font-semibold text-amber-300">Running in zero-config mode</p>
-        <p className="mt-0.5 text-amber-200/80">
-          Cool Router auto-generated secure encryption keys on first launch. They are persisted to{" "}
-          <code className="font-mono bg-amber-500/20 px-1 rounded text-xs">{dataDir}</code>. No
-          action is required — your data is encrypted and safe. To use custom keys, add{" "}
-          <code className="font-mono bg-amber-500/20 px-1 rounded text-xs">JWT_SECRET</code> and{" "}
-          <code className="font-mono bg-amber-500/20 px-1 rounded text-xs">
-            STORAGE_ENCRYPTION_KEY
-          </code>{" "}
-          to that file.
+      <span
+        className="material-symbols-outlined mt-0.5 shrink-0 text-[18px] text-text-muted"
+        aria-hidden="true"
+      >
+        key
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="font-medium text-text-main">Encryption keys created</p>
+        <p className="mt-0.5 leading-relaxed text-text-muted">
+          Cool Router generated the keys that protect your sign-in and stored credentials and saved
+          them to{" "}
+          {envFilePath ? (
+            <code className="break-all rounded bg-bg px-1 py-0.5 font-mono text-xs text-text-main">
+              {envFilePath}
+            </code>
+          ) : (
+            <>
+              <code className="rounded bg-bg px-1 py-0.5 font-mono text-xs text-text-main">
+                server.env
+              </code>{" "}
+              in your data folder
+            </>
+          )}
+          . Keep that file with the database when you back up or move your data.
         </p>
       </div>
       <button
+        type="button"
         onClick={() => setDismissed(true)}
-        className="shrink-0 text-amber-400/60 hover:text-amber-300 transition-colors ml-1"
+        className="-mr-1 flex size-7 shrink-0 items-center justify-center rounded text-text-muted transition-colors hover:text-text-main"
         aria-label="Dismiss"
       >
-        ✕
+        <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+          close
+        </span>
       </button>
     </div>
   );

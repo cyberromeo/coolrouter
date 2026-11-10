@@ -1,40 +1,51 @@
 import { NextResponse } from "next/server";
 import { getSettings } from "@/lib/localDb";
 import bcrypt from "bcryptjs";
-import { SignJWT } from "jose";
-import { cookies } from "next/headers";
+import { timingSafeEqual } from "crypto";
 import { loginSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
+import {
+  AUTH_COOKIE_NAME,
+  createSessionToken,
+  getSessionCookieOptions,
+  getSessionSecret,
+} from "@/shared/utils/authSession";
 
-// SECURITY: No hardcoded fallback — JWT_SECRET must be configured.
-if (!process.env.JWT_SECRET) {
-  console.error("[SECURITY] FATAL: JWT_SECRET is not set. Login authentication is disabled.");
+function safeEqual(a: string, b: string): boolean {
+  const left = Buffer.from(a, "utf8");
+  const right = Buffer.from(b, "utf8");
+  return left.length === right.length && timingSafeEqual(left, right);
 }
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET || "");
 
 export async function POST(request) {
   try {
-    // Fail-fast if JWT_SECRET is not configured
-    if (!process.env.JWT_SECRET) {
+    // SECURITY: no hardcoded fallback — without a signing secret nobody can sign in.
+    if (!getSessionSecret()) {
+      console.error("[SECURITY] JWT_SECRET is not set. Login is disabled.");
       return NextResponse.json(
         { error: "Server misconfigured: JWT_SECRET not set. Contact administrator." },
         { status: 500 }
       );
     }
 
-    const rawBody = await request.json();
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
+    }
 
-    // Zod validation
     const validation = validateBody(loginSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return NextResponse.json({ error: validation.error }, { status: 400 });
+      const detail = validation.error.details[0]?.message;
+      return NextResponse.json({ error: detail || validation.error.message }, { status: 400 });
     }
     const password = typeof validation.data.password === "string" ? validation.data.password : "";
     if (!password) {
-      return NextResponse.json({ error: "Invalid password payload" }, { status: 400 });
+      return NextResponse.json({ error: "Password is required" }, { status: 400 });
     }
-    const settings = await getSettings();
 
+    const settings = await getSettings();
     const storedHash = typeof settings.password === "string" ? settings.password : "";
 
     let isValid = false;
@@ -42,40 +53,27 @@ export async function POST(request) {
       isValid = await bcrypt.compare(password, storedHash);
     } else {
       // SECURITY: No default password — must be set via env or onboarding
-      if (!process.env.INITIAL_PASSWORD) {
+      const initialPassword = process.env.INITIAL_PASSWORD;
+      if (!initialPassword) {
         return NextResponse.json(
           { error: "No password configured. Complete onboarding first.", needsSetup: true },
           { status: 403 }
         );
       }
-      const initialPassword = process.env.INITIAL_PASSWORD;
-      isValid = password === initialPassword;
+      isValid = safeEqual(password, initialPassword);
     }
 
-    if (isValid) {
-      const forceSecureCookie = process.env.AUTH_COOKIE_SECURE === "true";
-      const forwardedProtoHeader = request.headers.get("x-forwarded-proto") || "";
-      const forwardedProto = forwardedProtoHeader.split(",")[0].trim().toLowerCase();
-      const isHttpsRequest = forwardedProto === "https" || request.nextUrl?.protocol === "https:";
-      const useSecureCookie = forceSecureCookie || isHttpsRequest;
-
-      const token = await new SignJWT({ authenticated: true })
-        .setProtectedHeader({ alg: "HS256" })
-        .setExpirationTime("30d")
-        .sign(SECRET);
-
-      const cookieStore = await cookies();
-      cookieStore.set("auth_token", token, {
-        httpOnly: true,
-        secure: useSecureCookie,
-        sameSite: "lax",
-        path: "/",
-      });
-
-      return NextResponse.json({ success: true });
+    if (!isValid) {
+      return NextResponse.json({ error: "Invalid password" }, { status: 401 });
     }
 
-    return NextResponse.json({ error: "Invalid password" }, { status: 401 });
+    const response = NextResponse.json({ success: true });
+    response.cookies.set(
+      AUTH_COOKIE_NAME,
+      await createSessionToken(),
+      getSessionCookieOptions(request)
+    );
+    return response;
   } catch (error) {
     console.error("[AUTH] Login failed:", error);
     return NextResponse.json({ error: "Internal server error" }, { status: 500 });

@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Card from "./Card";
 import { CardSkeleton } from "./Loading";
 import { fmtCompact as fmt, fmtFull, fmtCost } from "@/shared/utils/formatting";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
 import {
   StatCard,
   CompactStatGrid,
@@ -29,19 +30,24 @@ export default function UsageAnalytics() {
   const [analytics, setAnalytics] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const latestRangeRef = useRef(range);
 
   const fetchAnalytics = useCallback(async () => {
+    latestRangeRef.current = range;
     try {
       setLoading(true);
       const res = await fetch(`/api/usage/analytics?range=${range}`);
-      if (!res.ok) throw new Error("Failed to fetch");
+      if (!res.ok) throw new Error(await readApiError(res, "Failed to load usage analytics"));
       const data = await res.json();
+      // Clicking 7D then 30D quickly: a slow 7D answer must not land under the 30D button.
+      if (latestRangeRef.current !== range) return;
       setAnalytics(data);
       setError(null);
     } catch (err) {
-      setError((err as any).message);
+      if (latestRangeRef.current !== range) return;
+      setError((err as any)?.message || "Failed to load usage analytics");
     } finally {
-      setLoading(false);
+      if (latestRangeRef.current === range) setLoading(false);
     }
   }, [range]);
 
@@ -83,15 +89,18 @@ export default function UsageAnalytics() {
     const providers = analytics?.byProvider || [];
     if (providers.length <= 1) return 0;
 
+    // /api/usage/analytics reports the per-provider request count as `requests`.
+    const callsOf = (p) => p.requests || p.totalRequests || p.apiCalls || 0;
+
     let totalCalls = 0;
     for (const p of providers) {
-      totalCalls += p.totalRequests || p.apiCalls || 0;
+      totalCalls += callsOf(p);
     }
     if (totalCalls === 0) return 0;
 
     let h = 0;
     for (const p of providers) {
-      const p_i = (p.totalRequests || p.apiCalls || 0) / totalCalls;
+      const p_i = callsOf(p) / totalCalls;
       if (p_i > 0) h -= p_i * Math.log2(p_i);
     }
 
@@ -100,7 +109,21 @@ export default function UsageAnalytics() {
   }, [analytics]);
 
   if (loading && !analytics) return <CardSkeleton />;
-  if (error) return <Card className="p-6 text-center text-red-500">Error: {error}</Card>;
+  if (error) {
+    return (
+      <Card className="p-6 text-center">
+        <p className="text-red-500">Error: {error}</p>
+        <button
+          type="button"
+          onClick={fetchAnalytics}
+          disabled={loading}
+          className="mt-3 px-3 py-1.5 rounded-lg border border-border text-xs font-medium text-text-main hover:bg-bg-subtle transition-colors disabled:opacity-50"
+        >
+          {loading ? "Retrying…" : "Retry"}
+        </button>
+      </Card>
+    );
+  }
 
   const s = analytics?.summary || {};
 
@@ -192,7 +215,7 @@ export default function UsageAnalytics() {
               {
                 icon: "compare_arrows",
                 label: "I/O Ratio",
-                value: `${ioRatio}x`,
+                value: ioRatio === "—" ? ioRatio : `${ioRatio}x`,
                 color: "text-violet-500",
               },
               {

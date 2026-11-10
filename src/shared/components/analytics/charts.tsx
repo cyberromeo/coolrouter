@@ -215,7 +215,7 @@ export function ActivityHeatmap({ activityMap }) {
     weeks.forEach((week, weekIdx) => {
       const firstDay = week.find((d) => d !== null);
       if (firstDay) {
-        const m = new Date(firstDay.date).getMonth();
+        const m = Number(firstDay.date.slice(5, 7)) - 1;
         if (m !== lastMonth) {
           const monthNames = [
             "Jan",
@@ -240,7 +240,8 @@ export function ActivityHeatmap({ activityMap }) {
   }, [weeks]);
 
   function getCellColor(value) {
-    if (!value || value === 0) return "bg-white/[0.04]";
+    // White at 4% is invisible on the light theme's white card.
+    if (!value || value === 0) return "bg-black/[0.06] dark:bg-white/[0.04]";
     const intensity = Math.min(value / (cells.maxVal || 1), 1);
     if (intensity < 0.25) return "bg-primary/20";
     if (intensity < 0.5) return "bg-primary/40";
@@ -253,7 +254,7 @@ export function ActivityHeatmap({ activityMap }) {
       <div className="flex items-center justify-between mb-3">
         <h3 className="text-sm font-semibold text-text-muted uppercase tracking-wider">Activity</h3>
         <span className="text-xs text-text-muted">
-          {Object.keys(activityMap || {}).length} active days ·{" "}
+          {Object.values(activityMap || {}).filter((v: number) => v > 0).length} active days ·{" "}
           {fmt(Object.values(activityMap || {}).reduce((a: number, b: number) => a + b, 0))} tokens
           · 365 days
         </span>
@@ -301,7 +302,7 @@ export function ActivityHeatmap({ activityMap }) {
 
       <div className="flex items-center gap-1 mt-2 ml-6 text-[10px] text-text-muted">
         <span>Less</span>
-        <div className="w-[10px] h-[10px] rounded-[2px] bg-white/[0.04]" />
+        <div className="w-[10px] h-[10px] rounded-[2px] bg-black/[0.06] dark:bg-white/[0.04]" />
         <div className="w-[10px] h-[10px] rounded-[2px] bg-primary/20" />
         <div className="w-[10px] h-[10px] rounded-[2px] bg-primary/40" />
         <div className="w-[10px] h-[10px] rounded-[2px] bg-primary/60" />
@@ -349,7 +350,7 @@ export function DailyTrendChart({ dailyTrend }) {
         >
           <XAxis
             dataKey="date"
-            tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+            tick={{ fontSize: 9, fill: "var(--color-text-muted)" }}
             axisLine={false}
             tickLine={false}
             interval={Math.max(Math.floor(chartData.length / 6), 0)}
@@ -369,7 +370,7 @@ export function DailyTrendChart({ dailyTrend }) {
           <Bar
             dataKey="Input"
             stackId="a"
-            fill="var(--primary)"
+            fill="var(--color-primary)"
             opacity={0.7}
             radius={[0, 0, 0, 0]}
             animationDuration={600}
@@ -769,7 +770,7 @@ export function WeeklyPattern({ weeklyPattern }) {
         <BarChart data={chartData} margin={{ top: 0, right: 0, left: 0, bottom: 0 }}>
           <XAxis
             dataKey="day"
-            tick={{ fontSize: 9, fill: "var(--text-muted)" }}
+            tick={{ fontSize: 9, fill: "var(--color-text-muted)" }}
             axisLine={false}
             tickLine={false}
           />
@@ -779,7 +780,7 @@ export function WeeklyPattern({ weeklyPattern }) {
           />
           <Bar
             dataKey="Tokens"
-            fill="var(--text-muted)"
+            fill="var(--color-text-muted)"
             opacity={0.3}
             radius={[3, 3, 0, 0]}
             animationDuration={400}
@@ -832,7 +833,7 @@ export function MostActiveDay7d({ activityMap }) {
     <Card className="p-4 flex flex-col justify-center" style={{ flex: 1, minHeight: 0 }}>
       <h3
         className="text-xs font-semibold uppercase tracking-wider mb-2"
-        style={{ color: "var(--text-muted)" }}
+        style={{ color: "var(--color-text-muted)" }}
       >
         Most Active Day
       </h3>
@@ -841,12 +842,12 @@ export function MostActiveDay7d({ activityMap }) {
           <span className="text-xl font-bold capitalize" style={{ lineHeight: 1.2 }}>
             {data.weekday}
           </span>
-          <span className="text-xs mt-1" style={{ color: "var(--text-muted)" }}>
+          <span className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
             {data.label} · {fmt(data.tokens)} tokens
           </span>
         </>
       ) : (
-        <span className="text-xs" style={{ color: "var(--text-muted)" }}>
+        <span className="text-xs" style={{ color: "var(--color-text-muted)" }}>
           No data in the last 7 days
         </span>
       )}
@@ -889,7 +890,8 @@ export function WeeklySquares7d({ activityMap }) {
   }, [activityMap, dateFormatter, weekdayFormatter]);
 
   function getSquareStyle(intensity) {
-    if (intensity === 0) return { background: "rgba(255,255,255,0.04)" };
+    // Empty days get a theme-aware class instead (see below): white at 4% vanishes on light.
+    if (intensity === 0) return {};
     const opacity = 0.15 + intensity * 0.75;
     return { background: `rgba(229, 77, 94, ${opacity.toFixed(2)})` };
   }
@@ -898,7 +900,7 @@ export function WeeklySquares7d({ activityMap }) {
     <Card className="p-4 flex flex-col justify-center" style={{ flex: 1, minHeight: 0 }}>
       <h3
         className="text-xs font-semibold uppercase tracking-wider mb-3"
-        style={{ color: "var(--text-muted)" }}
+        style={{ color: "var(--color-text-muted)" }}
       >
         Weekly
       </h3>
@@ -910,6 +912,7 @@ export function WeeklySquares7d({ activityMap }) {
           >
             <div
               title={`${d.dateLabel}: ${fmtFull(d.val)} tokens`}
+              className={d.intensity === 0 ? "bg-black/[0.06] dark:bg-white/[0.04]" : undefined}
               style={{
                 width: 36,
                 height: 36,
@@ -923,7 +926,7 @@ export function WeeklySquares7d({ activityMap }) {
               style={{
                 fontSize: 9,
                 fontWeight: 600,
-                color: "var(--text-muted)",
+                color: "var(--color-text-muted)",
                 letterSpacing: "0.03em",
               }}
             >
@@ -1049,7 +1052,7 @@ export function ModelTable({ byModel, summary }) {
                 </td>
                 <td className="px-4 py-2.5 text-right">
                   <div className="flex items-center gap-2 justify-end">
-                    <div className="w-16 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                    <div className="w-16 h-1.5 rounded-full bg-black/[0.06] dark:bg-white/[0.06] overflow-hidden">
                       <div
                         className="h-full rounded-full transition-all"
                         style={{ width: `${m.pct}%`, backgroundColor: getModelColor(i) }}
@@ -1223,13 +1226,13 @@ export function ModelOverTimeChart({ dailyByModel, modelNames }) {
         <AreaChart data={chartData} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
           <XAxis
             dataKey="dateLabel"
-            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
+            tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
             axisLine={false}
             tickLine={false}
             interval="preserveStartEnd"
           />
           <YAxis
-            tick={{ fontSize: 10, fill: "var(--text-muted)" }}
+            tick={{ fontSize: 10, fill: "var(--color-text-muted)" }}
             tickFormatter={(v) => fmt(v)}
             axisLine={false}
             tickLine={false}
@@ -1395,7 +1398,7 @@ export function ProviderTable({ byProvider }) {
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <div className="flex items-center gap-2 justify-end">
-                      <div className="w-16 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
+                      <div className="w-16 h-1.5 rounded-full bg-black/[0.06] dark:bg-white/[0.06] overflow-hidden">
                         <div
                           className="h-full rounded-full transition-all"
                           style={{

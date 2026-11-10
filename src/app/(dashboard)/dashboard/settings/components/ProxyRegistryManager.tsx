@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button, Card, Modal } from "@/shared/components";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 type ProxyItem = {
   id: string;
@@ -145,18 +146,24 @@ export default function ProxyRegistryManager() {
     void load();
   }, [load]);
 
-  useEffect(() => {
-    if (items.length > 0 && !bulkProxyId) {
-      setBulkProxyId(items[0].id);
-    }
-  }, [items, bulkProxyId]);
+  // Preselect a proxy only when the dialog opens. Doing it in an effect whenever the value
+  // was empty made "(clear assignment)" impossible to pick: it snapped back to the first proxy.
+  const openBulk = () => {
+    setError(null);
+    setBulkProxyId((current) =>
+      items.some((item) => item.id === current) ? current : items[0]?.id || ""
+    );
+    setBulkOpen(true);
+  };
 
   const openCreate = () => {
+    setError(null);
     setForm(EMPTY_FORM);
     setModalOpen(true);
   };
 
   const openEdit = (item: ProxyItem) => {
+    setError(null);
     setForm({
       id: item.id,
       name: item.name || "",
@@ -270,7 +277,7 @@ export default function ProxyRegistryManager() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data?.error?.message || "Failed to save proxy");
+        setError(getApiErrorMessage(data, "Failed to save proxy"));
         return;
       }
 
@@ -368,7 +375,7 @@ export default function ProxyRegistryManager() {
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(payload?.error?.message || "Failed to run bulk assignment");
+        setError(getApiErrorMessage(payload, "Failed to run bulk assignment"));
         return;
       }
 
@@ -405,7 +412,7 @@ export default function ProxyRegistryManager() {
               size="sm"
               variant="secondary"
               icon="account_tree"
-              onClick={() => setBulkOpen(true)}
+              onClick={openBulk}
               data-testid="proxy-registry-open-bulk"
             >
               Bulk Assign
@@ -633,6 +640,16 @@ export default function ProxyRegistryManager() {
             />
           </div>
 
+          {/* The card's error line is behind this dialog; show save errors here as well. */}
+          {error && (
+            <div
+              role="alert"
+              className="px-3 py-2 rounded border border-red-500/30 bg-red-500/10 text-sm text-red-400"
+            >
+              {error}
+            </div>
+          )}
+
           <div className="flex items-center justify-end gap-2 pt-2 border-t border-border">
             <Button size="sm" variant="secondary" onClick={() => setModalOpen(false)}>
               Cancel
@@ -697,6 +714,15 @@ export default function ProxyRegistryManager() {
                 onChange={(e) => setBulkScopeIds(e.target.value)}
                 placeholder="provider-openai,provider-anthropic"
               />
+            </div>
+          )}
+
+          {error && (
+            <div
+              role="alert"
+              className="px-3 py-2 rounded border border-red-500/30 bg-red-500/10 text-sm text-red-400"
+            >
+              {error}
             </div>
           )}
 

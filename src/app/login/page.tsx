@@ -1,65 +1,70 @@
 "use client";
 
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useTranslations } from "next-intl";
-
-import { useState, useEffect } from "react";
 import { Button, Input } from "@/shared/components";
 import CoolRouterLogo from "@/shared/components/CoolRouterLogo";
-import { useRouter } from "next/navigation";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
+
+/**
+ * Full page load on purpose. The dashboard is behind a server-side auth redirect, and
+ * the client router keeps the "/dashboard → /login" redirect it saw while signed out;
+ * `router.push("/dashboard")` right after signing in replays it and the page appears
+ * to ignore the password.
+ */
+function enterDashboard() {
+  window.location.replace("/dashboard");
+}
 
 export default function LoginPage() {
   const t = useTranslations("auth");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [hasPassword, setHasPassword] = useState(null);
-  const [setupComplete, setSetupComplete] = useState(null);
+  const [ready, setReady] = useState(false);
   const [initialPasswordActive, setInitialPasswordActive] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [nodeVersion, setNodeVersion] = useState(null);
-  const [nodeCompatible, setNodeCompatible] = useState(true);
-  const router = useRouter();
+  const [nodeVersion, setNodeVersion] = useState<string | null>(null);
 
   useEffect(() => {
-    setMounted(true);
-    async function checkAuth() {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const baseUrl = typeof window !== "undefined" ? window.location.origin : "";
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
 
+    (async () => {
       try {
-        const res = await fetch(`${baseUrl}/api/settings/require-login`, {
+        const res = await fetch("/api/settings/require-login", {
           signal: controller.signal,
+          cache: "no-store",
         });
-        clearTimeout(timeoutId);
-
         if (res.ok) {
           const data = await res.json();
-          if (data.nodeVersion) setNodeVersion(data.nodeVersion);
-          if (data.nodeCompatible === false) setNodeCompatible(false);
-          if (data.requireLogin === false) {
-            router.push("/dashboard");
-            router.refresh();
+          if (data.nodeCompatible === false && data.nodeVersion) setNodeVersion(data.nodeVersion);
+          // Nothing to sign in with: login is off, or no password has been created yet
+          // (the dashboard sends first-time visitors on to the setup wizard).
+          if (data.requireLogin === false || !data.hasPassword) {
+            enterDashboard();
             return;
           }
-          setHasPassword(!!data.hasPassword);
-          setSetupComplete(!!data.setupComplete);
           setInitialPasswordActive(data.initialPasswordActive === true);
-        } else {
-          setHasPassword(true);
-          setSetupComplete(true);
         }
-      } catch (err) {
+      } catch {
+        // Server unreachable or slow — still show the form so the user can retry.
+      } finally {
         clearTimeout(timeoutId);
-        setHasPassword(true);
-        setSetupComplete(true);
       }
-    }
-    checkAuth();
-  }, [router]);
+      setReady(true);
+    })();
 
-  const handleLogin = async (e) => {
-    e.preventDefault();
+    return () => {
+      clearTimeout(timeoutId);
+      controller.abort();
+    };
+  }, []);
+
+  const handleLogin = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!password || loading) return;
     setLoading(true);
     setError("");
 
@@ -71,265 +76,123 @@ export default function LoginPage() {
       });
 
       if (res.ok) {
-        sessionStorage.setItem("coolrouter_login_time", String(Date.now()));
-        router.push("/dashboard");
-        router.refresh();
-      } else {
-        const data = await res.json();
-        // (#521) If no password is set, redirect to onboarding instead of showing an error
-        if (data.needsSetup) {
-          router.push("/dashboard/onboarding");
-          return;
+        try {
+          sessionStorage.setItem("coolrouter_login_time", String(Date.now()));
+        } catch {
+          /* storage unavailable */
         }
-        setError(data.error || t("invalidPassword"));
+        // Keep the button in its loading state until the new page replaces this one.
+        enterDashboard();
+        return;
       }
-    } catch (err) {
+
+      const data = await res.json().catch(() => null);
+      if (data?.needsSetup) {
+        window.location.replace("/dashboard/onboarding");
+        return;
+      }
+      setError(
+        res.status === 401
+          ? t("invalidPassword")
+          : getApiErrorMessage(data, t("errorOccurredRetry"))
+      );
+    } catch {
       setError(t("errorOccurredRetry"));
-    } finally {
-      setLoading(false);
     }
+    setLoading(false);
   };
 
-  const nodeWarningBanner =
-    !nodeCompatible && nodeVersion ? (
-      <div className="w-full max-w-lg mx-auto mb-6 animate-in fade-in slide-in-from-top-2 duration-500">
-        <div className="bg-red-950/60 border-2 border-red-500/40 rounded-2xl p-6 shadow-lg shadow-red-900/20 backdrop-blur-sm">
-          <div className="flex items-start gap-4">
-            <div className="w-12 h-12 rounded-xl bg-red-500/20 flex items-center justify-center flex-shrink-0 mt-0.5">
-              <span className="material-symbols-outlined text-red-400 text-[28px]">error</span>
-            </div>
-            <div className="flex-1 min-w-0">
-              <h3 className="text-base font-bold text-red-300 mb-1">
-                {t("nodeIncompatibleTitle")}
-              </h3>
-              <p className="text-sm text-red-200/80 leading-relaxed mb-3">
-                {t("nodeIncompatibleDesc", { version: nodeVersion })}
-              </p>
-              <div className="bg-black/40 rounded-lg px-4 py-3 font-mono text-sm border border-red-500/20">
-                <div className="flex items-center gap-2 text-red-300/60 mb-1">
-                  <span className="material-symbols-outlined text-[14px]">terminal</span>
-                  <span className="text-xs">{t("nodeIncompatibleFixLabel")}</span>
-                </div>
-                <code className="text-amber-300">nvm install 22 && nvm use 22</code>
-              </div>
-              <p className="text-xs text-red-300/50 mt-3 flex items-center gap-1.5">
-                <span className="material-symbols-outlined text-[14px]">info</span>
-                {t("nodeIncompatibleHint")}
-              </p>
-            </div>
-          </div>
-        </div>
-      </div>
-    ) : null;
-
-  if (hasPassword === null || setupComplete === null) {
+  if (!ready) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6">
-        {nodeWarningBanner}
-        <div className="flex flex-col items-center gap-3">
-          <div className="relative">
-            <div className="w-10 h-10 border-2 border-primary/20 rounded-full"></div>
-            <div className="absolute inset-0 w-10 h-10 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
-          </div>
-          <span className="text-sm text-text-muted">{t("loading")}</span>
-        </div>
-      </div>
-    );
-  }
-
-  if (!hasPassword && !setupComplete) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6">
-        {nodeWarningBanner}
-        <div
-          className={`w-full max-w-md transition-[opacity,transform] duration-700 ease-out ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
+      <div className="flex min-h-dvh items-center justify-center bg-bg">
+        <span
+          className="material-symbols-outlined animate-spin text-[22px] text-text-muted"
+          role="status"
+          aria-label={t("loading")}
         >
-          <div className="text-center mb-10">
-            <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-primary/10 to-primary/5 border border-primary/10 mb-6">
-              <span className="material-symbols-outlined text-primary text-[40px]">
-                rocket_launch
-              </span>
-            </div>
-            <h1 className="text-3xl font-bold text-text-main tracking-tight">{t("welcome")}</h1>
-            <p className="text-text-muted mt-2">{t("configureInstance")}</p>
-          </div>
-
-          <div className="bg-surface border border-border rounded-2xl p-8 shadow-soft">
-            <div className="text-center">
-              <p className="text-text-muted leading-relaxed mb-6">{t("runOnboardingWizard")}</p>
-              <Button
-                variant="primary"
-                className="w-full h-11 text-sm font-medium"
-                onClick={() => router.push("/dashboard/onboarding")}
-              >
-                {t("startOnboarding")}
-              </Button>
-            </div>
-          </div>
-
-          <p className="text-center text-xs text-text-muted/60 mt-8">
-            Cool Router — {t("unifiedProxy")}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (!hasPassword && setupComplete) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-bg p-6">
-        {nodeWarningBanner}
-        <div
-          className={`w-full max-w-md transition-[opacity,transform] duration-700 ease-out ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
-        >
-          <div className="text-center mb-10">
-            <div className="inline-flex items-center justify-center w-20 h-20 rounded-3xl bg-gradient-to-br from-amber-500/10 to-amber-500/5 border border-amber-500/10 mb-6">
-              <span className="material-symbols-outlined text-amber-500 text-[40px]">
-                shield_person
-              </span>
-            </div>
-            <h1 className="text-3xl font-bold text-text-main tracking-tight">
-              {t("secureYourInstance")}
-            </h1>
-            <p className="text-text-muted mt-2">{t("passwordNotEnabled")}</p>
-          </div>
-
-          <div className="bg-surface border border-border rounded-2xl p-8 shadow-soft">
-            <div className="text-center">
-              <p className="text-text-muted leading-relaxed mb-6">{t("setPasswordDescription")}</p>
-              <Button
-                variant="primary"
-                className="w-full h-11 text-sm font-medium"
-                onClick={() => router.push("/dashboard/settings?tab=security")}
-              >
-                {t("configurePassword")}
-              </Button>
-            </div>
-          </div>
-
-          <p className="text-center text-xs text-text-muted/60 mt-8">
-            Cool Router — {t("unifiedAiApiProxy")}
-          </p>
-        </div>
+          progress_activity
+        </span>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-bg">
-      {nodeWarningBanner && (
-        <div className="flex justify-center pt-6 px-6">{nodeWarningBanner}</div>
-      )}
-      <div className="flex-1 flex bg-bg">
-        <div className="flex-1 flex items-center justify-center p-6">
+    <div className="flex min-h-dvh flex-col items-center justify-center bg-bg px-4 py-10">
+      <main id="main-content" className="w-full max-w-[380px]">
+        {nodeVersion && (
           <div
-            className={`w-full max-w-sm transition-[opacity,transform] duration-700 ease-out ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
+            role="alert"
+            className="mb-6 rounded-lg border border-warning/40 bg-warning/[0.08] px-4 py-3"
           >
-            <div className="mb-10">
-              <div className="flex items-center gap-3 mb-8">
-                <div className="w-10 h-10 rounded-lg bg-primary text-primary-foreground flex items-center justify-center">
-                  <CoolRouterLogo size={22} />
-                </div>
-                <span className="text-xl font-semibold text-text-main tracking-tight">
-                  Cool Router
-                </span>
-              </div>
-              <h1 className="text-2xl font-bold text-text-main tracking-tight">{t("signIn")}</h1>
-              <p className="text-text-muted mt-1.5">{t("enterPassword")}</p>
-            </div>
-
-            <form onSubmit={handleLogin} className="space-y-5">
-              <div className="space-y-2">
-                <label className="text-sm font-medium text-text-main">{t("password")}</label>
-                <Input
-                  type="password"
-                  placeholder={t("enterPassword")}
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  required
-                  autoFocus
-                  className="h-11"
-                />
-                {error && (
-                  <p className="text-sm text-red-500 flex items-center gap-1.5 pt-1">
-                    <span className="material-symbols-outlined text-base">error</span>
-                    {error}
-                  </p>
-                )}
-                {initialPasswordActive && (
-                  <p className="text-xs text-text-muted/60 pt-0.5">{t("defaultPasswordHint")}</p>
-                )}
-              </div>
-
-              <Button
-                type="submit"
-                variant="primary"
-                className="w-full h-11 text-sm font-medium"
-                loading={loading}
-              >
-                {t("continue")}
-              </Button>
-            </form>
-
-            <div className="mt-6 pt-6 border-t border-border">
-              <a
-                href="/forgot-password"
-                className="text-sm text-text-muted hover:text-primary transition-colors"
-              >
-                {t("forgotPassword")}
-              </a>
-            </div>
+            <p className="text-sm font-medium text-text-main">{t("nodeIncompatibleTitle")}</p>
+            <p className="mt-1 text-sm text-text-muted">
+              {t("nodeIncompatibleDesc", { version: nodeVersion })}
+            </p>
           </div>
+        )}
+
+        <div className="mb-8 flex flex-col items-center text-center">
+          <div className="mb-5 flex size-11 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <CoolRouterLogo size={24} />
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-text-main">{t("signIn")}</h1>
+          <p className="mt-1.5 text-sm text-text-muted">{t("enterPassword")}</p>
         </div>
 
-        <div className="hidden lg:flex lg:w-1/2 bg-gradient-to-br from-primary/5 via-primary/3 to-transparent items-center justify-center p-12">
-          <div
-            className={`max-w-md transition-all duration-700 delay-200 ease-out ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}
-          >
-            <div className="space-y-8">
-              <div>
-                <h2 className="text-2xl font-bold text-text-main mb-3">{t("unifiedAiApiProxy")}</h2>
-                <p className="text-text-muted leading-relaxed">{t("unifiedAiApiProxyDesc")}</p>
-              </div>
-
-              <div className="space-y-4">
-                {[
-                  {
-                    icon: "swap_horiz",
-                    title: t("featureMultiProviderTitle"),
-                    desc: t("featureMultiProviderDesc"),
-                  },
-                  {
-                    icon: "speed",
-                    title: t("featureLoadBalancingTitle"),
-                    desc: t("featureLoadBalancingDesc"),
-                  },
-                  {
-                    icon: "analytics",
-                    title: t("featureUsageTrackingTitle"),
-                    desc: t("featureUsageTrackingDesc"),
-                  },
-                ].map((item) => (
-                  <div
-                    key={item.icon}
-                    className="flex items-start gap-4 p-4 rounded-xl bg-surface/50 border border-border"
-                  >
-                    <div className="w-10 h-10 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      <span className="material-symbols-outlined text-primary text-[20px]">
-                        {item.icon}
-                      </span>
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-text-main">{item.title}</h3>
-                      <p className="text-sm text-text-muted">{item.desc}</p>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
+        <form
+          onSubmit={handleLogin}
+          className="rounded-xl border border-border bg-surface p-6 shadow-elevated"
+        >
+          <div className="relative">
+            <Input
+              label={t("password")}
+              type={showPassword ? "text" : "password"}
+              name="password"
+              autoComplete="current-password"
+              autoFocus
+              value={password}
+              onChange={(e) => {
+                setPassword(e.target.value);
+                if (error) setError("");
+              }}
+              error={error || undefined}
+              hint={initialPasswordActive ? t("defaultPasswordHint") : undefined}
+              inputClassName="h-10 pr-10"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((value) => !value)}
+              aria-label={showPassword ? t("hidePassword") : t("showPassword")}
+              aria-pressed={showPassword}
+              className="absolute right-1.5 top-[30px] flex size-8 items-center justify-center rounded text-text-muted transition-colors hover:text-text-main"
+            >
+              <span className="material-symbols-outlined text-[18px]" aria-hidden="true">
+                {showPassword ? "visibility_off" : "visibility"}
+              </span>
+            </button>
           </div>
-        </div>
-      </div>
+
+          <Button
+            type="submit"
+            size="lg"
+            fullWidth
+            className="mt-5 h-10"
+            loading={loading}
+            disabled={!password}
+          >
+            {t("continue")}
+          </Button>
+        </form>
+
+        <p className="mt-5 text-center">
+          <Link
+            href="/forgot-password"
+            className="rounded text-sm text-text-muted transition-colors hover:text-text-main"
+          >
+            {t("forgotPassword")}
+          </Link>
+        </p>
+      </main>
     </div>
   );
 }

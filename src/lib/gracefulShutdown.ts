@@ -17,8 +17,7 @@ const SHUTDOWN_TIMEOUT_MS = parseInt(process.env.SHUTDOWN_TIMEOUT_MS || "30000",
 
 declare global {
   var __coolrouterShutdown:
-    | { init: boolean; shuttingDown: boolean; activeRequests: number }
-    | undefined;
+    { init: boolean; shuttingDown: boolean; activeRequests: number } | undefined;
 }
 
 function getShutdownState() {
@@ -131,4 +130,20 @@ export function initGracefulShutdown(): void {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   console.log("[Shutdown] Graceful shutdown handlers registered.");
+}
+
+/**
+ * Ask this process to shut down gracefully (POST /api/shutdown and /api/restart).
+ *
+ * On POSIX, signalling ourselves runs the SIGTERM handlers registered above. Windows has
+ * no signals: process.kill(pid, "SIGTERM") terminates the process on the spot, skipping
+ * the request drain and the SQLite checkpoint/close. Emitting the event runs the same
+ * handlers there.
+ */
+export function requestProcessShutdown(): void {
+  if (process.platform === "win32" && process.listenerCount("SIGTERM") > 0) {
+    process.emit("SIGTERM", "SIGTERM");
+    return;
+  }
+  process.kill(process.pid, "SIGTERM");
 }

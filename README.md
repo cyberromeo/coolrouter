@@ -27,7 +27,7 @@ If a provider is rate-limited or down, a **combo** falls back to the next model 
 
 ## Features
 
-- **One endpoint**: OpenAI Chat Completions, Responses, Anthropic Messages, embeddings, images, audio and rerank.
+- **One endpoint**: OpenAI Chat Completions, Responses, Anthropic Messages, Gemini `generateContent`, embeddings, images, audio and rerank.
 - **60+ providers**: API keys or account sign-in, including several free tiers.
 - **Combos**: chain models with fallback, round-robin, weighted, cheapest-first and more.
 - **API keys**: issue keys for each app, teammate or tool, with optional model and provider limits.
@@ -45,7 +45,7 @@ If a provider is rate-limited or down, a **combo** falls back to the next model 
 | Docker   | `docker run -d -p 20128:20128 -v cool-router-data:/app/data ghcr.io/cyberromeo/cool-router:latest`                 |
 | Source   | `git clone https://github.com/cyberromeo/coolrouter && cd coolrouter && npm install && npm run build && npm start` |
 
-Full instructions, including checksum and signature verification: [docs/INSTALL.md](docs/INSTALL.md).
+The desktop builds are not code-signed yet, so macOS and Windows ask for confirmation on first launch — [what to click](docs/INSTALL.md#first-launch-on-macos-and-windows). Full instructions, including checksum and signature verification: [docs/INSTALL.md](docs/INSTALL.md).
 
 ## Updates
 
@@ -54,7 +54,7 @@ Cool Router checks [GitHub Releases](https://github.com/cyberromeo/coolrouter/re
 | Install                 | How you update                                                                                       |
 | ----------------------- | ---------------------------------------------------------------------------------------------------- |
 | Windows, Linux AppImage | Downloads in the background, then **Restart to update**                                              |
-| macOS, Linux `.deb`     | Notification and banner link to the new installer (unsigned builds can't self-install)               |
+| macOS, Linux `.deb`     | Notification and banner link to the new installer (these builds can't replace themselves)            |
 | Docker                  | `docker pull ghcr.io/cyberromeo/cool-router:latest && docker compose up -d` (or re-run `docker run`) |
 | Source                  | `git pull && npm install && npm run build`, then restart                                             |
 
@@ -122,7 +122,7 @@ npm run test:unit
 npm run build
 ```
 
-Requires Node.js 18, 20 or 22 (`package.json` engines: `>=18 <24`; Node 22 LTS recommended, Node 24 is not supported by the SQLite driver). See [CONTRIBUTING.md](CONTRIBUTING.md).
+Requires Node.js 20.9 or newer (`package.json` engines: `>=20.9 <25`; Node 22 LTS recommended). See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

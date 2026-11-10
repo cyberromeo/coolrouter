@@ -264,3 +264,65 @@ test("Chat -> Responses filters orphan function_call_output items and leaves emp
   assert.equal(result.input.filter((item) => item.type === "function_call_output").length, 1);
   assert.equal(result.input.find((item) => item.type === "function_call_output").call_id, "call_2");
 });
+
+test("Responses -> Chat treats a plain string input as a user message", () => {
+  const result = openaiResponsesToOpenAIRequest(
+    "gpt-4o",
+    { model: "gpt-4o", input: "hi from responses" },
+    false,
+    null
+  );
+
+  assert.deepEqual(result.messages, [{ role: "user", content: "hi from responses" }]);
+  assert.equal("input" in result, false);
+});
+
+test("Responses -> Chat keeps instructions as the system prompt ahead of a string input", () => {
+  const result = openaiResponsesToOpenAIRequest(
+    "gpt-4o",
+    { input: "What is 2+2?", instructions: "Answer in one word." },
+    true,
+    null
+  );
+
+  assert.deepEqual(result.messages, [
+    { role: "system", content: "Answer in one word." },
+    { role: "user", content: "What is 2+2?" },
+  ]);
+  assert.equal("instructions" in result, false);
+});
+
+test("Responses -> Chat accepts string entries and a single item object as input", () => {
+  const fromList = openaiResponsesToOpenAIRequest(
+    "gpt-4o",
+    { input: ["first", { role: "assistant", content: "second" }, "third"] },
+    false,
+    null
+  );
+  assert.deepEqual(fromList.messages, [
+    { role: "user", content: "first" },
+    { role: "assistant", content: "second" },
+    { role: "user", content: "third" },
+  ]);
+
+  const fromObject = openaiResponsesToOpenAIRequest(
+    "gpt-4o",
+    { input: { role: "user", content: [{ type: "input_text", text: "solo" }] } },
+    false,
+    null
+  );
+  assert.deepEqual(fromObject.messages, [
+    { role: "user", content: [{ type: "text", text: "solo" }] },
+  ]);
+});
+
+test("Responses -> Chat adds no message for an empty string input", () => {
+  const result = openaiResponsesToOpenAIRequest(
+    "gpt-4o",
+    { input: "", instructions: "Rules" },
+    false,
+    null
+  );
+
+  assert.deepEqual(result.messages, [{ role: "system", content: "Rules" }]);
+});

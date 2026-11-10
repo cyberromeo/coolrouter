@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { generatePKCE } from "@/lib/oauth/utils/pkce";
 import { KiroService } from "@/lib/oauth/services/kiro";
+import { requireManagementAuth } from "@/lib/api/requireManagementAuth";
 
 /**
  * GET /api/oauth/kiro/social-authorize
@@ -8,6 +9,11 @@ import { KiroService } from "@/lib/oauth/services/kiro";
  * Uses kiro:// custom protocol as required by AWS Cognito
  */
 export async function GET(request) {
+  // The whole /api/oauth/ prefix is on the proxy's public allowlist, so this handler has to
+  // authenticate by itself: it is only ever called by the signed-in dashboard.
+  const authError = await requireManagementAuth(request);
+  if (authError) return authError;
+
   try {
     const { searchParams } = new URL(request.url);
     const provider = searchParams.get("provider"); // "google" or "github"

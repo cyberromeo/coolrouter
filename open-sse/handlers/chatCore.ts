@@ -67,7 +67,10 @@ import {
   getCodexDualWindowCooldownMs,
 } from "../executors/codex.ts";
 import { invalidateCodexQuotaCache } from "../services/codexQuotaFetcher.ts";
-import { translateNonStreamingResponse } from "./responseTranslator.ts";
+import {
+  convertOpenAINonStreamingToResponses,
+  translateNonStreamingResponse,
+} from "./responseTranslator.ts";
 import { extractUsageFromResponse } from "./usageExtractor.ts";
 import {
   parseSSEToClaudeResponse,
@@ -303,6 +306,45 @@ function buildClaudePromptCacheLogMeta(
 
 function toPositiveNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : 0;
+}
+
+// Request fields other than `messages` that carry prompt content, per client format:
+// Claude `system`, Responses `input` / `instructions`, Gemini `contents` / system instruction,
+// Antigravity `request`.
+const SEMANTIC_CACHE_PROMPT_FIELDS = [
+  "system",
+  "instructions",
+  "input",
+  "contents",
+  "systemInstruction",
+  "system_instruction",
+  "request",
+];
+
+/**
+ * Messages to hash for the semantic cache signature.
+ *
+ * generateSignature() hashes `messages` only. That is the whole prompt of an OpenAI chat
+ * request, but not of the other client formats — a Responses request has no `messages` at
+ * all, so every Responses request for a model used to share one cache entry and got the
+ * first cached answer back. The cached payload is also stored in the client's response
+ * format, so two formats must not share an entry either. Both are folded into the signature
+ * as one synthetic trailing message; plain OpenAI chat requests hash exactly as before.
+ */
+export function getSemanticCacheMessages(
+  body: Record<string, unknown> | null | undefined,
+  clientResponseFormat?: string | null
+): unknown[] {
+  const messages = Array.isArray(body?.messages) ? (body.messages as unknown[]) : [];
+  const extra: Record<string, unknown> = {};
+  if (clientResponseFormat && clientResponseFormat !== FORMATS.OPENAI) {
+    extra.format = clientResponseFormat;
+  }
+  for (const field of SEMANTIC_CACHE_PROMPT_FIELDS) {
+    if (body?.[field] !== undefined) extra[field] = body[field];
+  }
+  if (Object.keys(extra).length === 0) return messages;
+  return [...messages, { role: "cache-key", content: extra }];
 }
 
 function buildCacheUsageLogMeta(usage: Record<string, unknown> | null | undefined) {
@@ -748,11 +790,18 @@ export async function handleChatCore({
     delete b.streaming;
   }
 
-  const stream = resolveStreamFlag(body?.stream, acceptHeader);
+  // An omitted `stream` means non-streaming for OpenAI / Responses / Anthropic clients (their
+  // spec default) unless the Accept header asks for text/event-stream; see resolveStreamFlag.
+  const stream = resolveStreamFlag(body?.stream, acceptHeader, sourceFormat);
 
   // ── Phase 9.1: Semantic cache check (non-streaming, temp=0 only) ──
   if (isCacheable(body, clientRawRequest?.headers)) {
-    const signature = generateSignature(model, body.messages, body.temperature, body.top_p);
+    const signature = generateSignature(
+      model,
+      getSemanticCacheMessages(body, clientResponseFormat),
+      body.temperature,
+      body.top_p
+    );
     const cached = getCachedResponse(signature);
     if (cached) {
       log?.debug?.("CACHE", `Semantic cache HIT for ${model}`);
@@ -992,8 +1041,7 @@ export async function handleChatCore({
                 ) {
                   // Only extract text if it's explicitly a text-only representation without data
                   const fileData = (block.file_url ?? block.file ?? block.document) as
-                    | Record<string, unknown>
-                    | undefined;
+                    Record<string, unknown> | undefined;
                   if (
                     (block.type === "file" || block.type === "document") &&
                     !fileData?.url &&
@@ -2032,16 +2080,14 @@ export async function handleChatCore({
           usage.cached_tokens ??
           (
             (usage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
+              Record<string, unknown> | undefined
           )?.cached_tokens
       );
       const cacheCreationTokens = toPositiveNumber(
         usage.cache_creation_input_tokens ??
           (
             (usage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
+              Record<string, unknown> | undefined
           )?.cache_creation_tokens
       );
 
@@ -2105,9 +2151,14 @@ export async function handleChatCore({
     // Strips non-standard fields (x_groq, usage_breakdown, service_tier, etc.)
     // Extracts <think> and <thinking> tags into reasoning_content
     // Source format determines output shape. If we are outputting OpenAI shape or pseudo-OpenAI shape, sanitize.
+    // A native Responses payload (Responses upstream → Responses client) is not a
+    // chat.completion: the sanitizer would rebuild it around `choices` and drop `output`.
+    const isNativeResponsesPayload =
+      translatedResponse?.object === "response" && Array.isArray(translatedResponse?.output);
     if (
-      clientResponseFormat === FORMATS.OPENAI ||
-      clientResponseFormat === FORMATS.OPENAI_RESPONSES
+      (clientResponseFormat === FORMATS.OPENAI ||
+        clientResponseFormat === FORMATS.OPENAI_RESPONSES) &&
+      !isNativeResponsesPayload
     ) {
       translatedResponse = sanitizeOpenAIResponse(translatedResponse);
     }
@@ -2127,9 +2178,32 @@ export async function handleChatCore({
       }
     }
 
+    // Responses clients (POST /v1/responses) expect a Responses object, not a chat.completion.
+    // The payload is handled as a chat.completion up to here (sanitizer, usage), so this is
+    // the last shaping step; native Responses payloads pass through unchanged.
+    if (clientResponseFormat === FORMATS.OPENAI_RESPONSES) {
+      translatedResponse = convertOpenAINonStreamingToResponses(translatedResponse);
+      if (
+        isNativeResponsesPayload &&
+        translatedResponse?.usage &&
+        translatedResponse.usage.total_tokens === undefined
+      ) {
+        // filterUsageForFormat keeps input/output tokens only; the Responses usage object
+        // also carries their sum.
+        translatedResponse.usage.total_tokens =
+          (Number(translatedResponse.usage.input_tokens) || 0) +
+          (Number(translatedResponse.usage.output_tokens) || 0);
+      }
+    }
+
     // ── Phase 9.1: Cache store (non-streaming, temp=0) ──
     if (isCacheable(body, clientRawRequest?.headers)) {
-      const signature = generateSignature(model, body.messages, body.temperature, body.top_p);
+      const signature = generateSignature(
+        model,
+        getSemanticCacheMessages(body, clientResponseFormat),
+        body.temperature,
+        body.top_p
+      );
       const tokensSaved = usage?.prompt_tokens + usage?.completion_tokens || 0;
       setCachedResponse(signature, model, translatedResponse, tokensSaved);
       log?.debug?.("CACHE", `Stored response for ${model} (${tokensSaved} tokens)`);
@@ -2203,16 +2277,14 @@ export async function handleChatCore({
           streamUsage.cached_tokens ??
           (
             (streamUsage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
+              Record<string, unknown> | undefined
           )?.cached_tokens
       );
       const cacheCreationTokens = toPositiveNumber(
         streamUsage.cache_creation_input_tokens ??
           (
             (streamUsage as Record<string, unknown>).prompt_tokens_details as
-              | Record<string, unknown>
-              | undefined
+              Record<string, unknown> | undefined
           )?.cache_creation_tokens
       );
 

@@ -4,6 +4,8 @@ import { useState, useEffect } from "react";
 import { Card, Button, Input, Toggle } from "@/shared/components";
 import { cn } from "@/shared/utils/cn";
 import { ROUTING_STRATEGIES } from "@/shared/constants/routingStrategies";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
+import { useNotificationStore } from "@/store/notificationStore";
 import { useTranslations } from "next-intl";
 
 const STRATEGY_LABEL_FALLBACKS: Record<string, string> = {
@@ -35,6 +37,7 @@ export default function ComboDefaultsTab() {
   const [providerOverrides, setProviderOverrides] = useState<any>({});
   const [newOverrideProvider, setNewOverrideProvider] = useState("");
   const [saving, setSaving] = useState(false);
+  const notify = useNotificationStore();
   const t = useTranslations("settings");
   const tc = useTranslations("common");
   const strategyOptions = ROUTING_STRATEGIES.map((strategy) => ({
@@ -68,13 +71,22 @@ export default function ComboDefaultsTab() {
   const saveComboDefaults = async () => {
     setSaving(true);
     try {
-      await fetch("/api/settings/combo-defaults", {
+      const res = await fetch("/api/settings/combo-defaults", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ comboDefaults, providerOverrides }),
       });
+      // The API validates ranges (e.g. timeout >= 1000 ms, concurrency >= 1). A rejected save
+      // used to look exactly like a successful one: no message either way.
+      if (!res.ok) {
+        const detail = await readApiError(res, "");
+        notify.error(detail ? `${t("saveFailed")}: ${detail}` : t("saveFailed"));
+        return;
+      }
+      notify.success(t("saved"));
     } catch (err) {
       console.error("Failed to save combo defaults:", err);
+      notify.error(t("saveFailed"));
     } finally {
       setSaving(false);
     }

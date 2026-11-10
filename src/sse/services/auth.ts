@@ -849,8 +849,7 @@ export async function markAccountUnavailable(
     // (like Antigravity), a 404 means the specific model doesn't exist or isn't available
     // for this account — it should NOT lock out the entire connection.
     const connBaseUrl = (conn?.providerSpecificData as Record<string, unknown>)?.baseUrl as
-      | string
-      | undefined;
+      string | undefined;
 
     const isPassthroughProvider = provider && getPassthroughProviders().has(provider);
     const isPerModelQuotaProvider = hasPerModelQuota(provider);
@@ -1025,4 +1024,29 @@ export function extractApiKey(request: Request) {
 export async function isValidApiKey(apiKey: string) {
   if (!apiKey) return false;
   return await validateApiKey(apiKey);
+}
+
+/**
+ * Anthropic SDKs send the API key in `x-api-key` rather than `Authorization: Bearer`,
+ * which is where extractApiKey() looks.
+ *
+ * When the request has no Authorization header and its `x-api-key` is a valid Cool Router
+ * key, returns a copy of the request that carries the key as a Bearer token, so the key's
+ * policy, usage attribution and REQUIRE_API_KEY all apply. In every other case the request
+ * is returned untouched: an x-api-key that is not a Cool Router key (e.g. a placeholder)
+ * keeps being ignored, exactly as before.
+ */
+export async function withAnthropicApiKeyAsBearer(request: Request): Promise<Request> {
+  if (request.headers.get("authorization")) return request;
+  const apiKey = (request.headers.get("x-api-key") || "").trim();
+  if (!apiKey || !(await isValidApiKey(apiKey))) return request;
+
+  const headers = new Headers(request.headers);
+  headers.set("authorization", `Bearer ${apiKey}`);
+  headers.delete("content-length");
+  return new Request(request.url, {
+    method: request.method,
+    headers,
+    body: await request.text(),
+  });
 }

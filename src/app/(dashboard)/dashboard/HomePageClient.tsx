@@ -1,8 +1,16 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import { Card } from "@/shared/components";
+import { copyToClipboard } from "@/shared/utils/clipboard";
+
+// Used for the server render only when the request's own origin could not be determined.
+const FALLBACK_ORIGIN = "http://localhost:20128";
+
+// The page origin never changes while the page is open, so there is nothing to subscribe to.
+const subscribeToNothing = () => () => {};
+const getBrowserOrigin = () => window.location.origin;
 
 type Stats = {
   providers: number | null;
@@ -45,12 +53,11 @@ function CopyButton({ value, label = "Copy" }: { value: string; label?: string }
     <button
       type="button"
       onClick={async () => {
-        try {
-          await navigator.clipboard.writeText(value);
+        // copyToClipboard falls back to execCommand on plain-HTTP (LAN / Docker) origins,
+        // where navigator.clipboard does not exist.
+        if (await copyToClipboard(value)) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
-        } catch {
-          /* clipboard unavailable */
         }
       }}
       className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-surface px-2.5 text-xs font-medium text-text-muted transition-colors hover:text-text-main"
@@ -75,9 +82,22 @@ function StatTile({ label, value, href }: { label: string; value: string; href: 
   );
 }
 
-export default function HomePageClient(_props: { machineId?: string }) {
-  const [origin] = useState(() =>
-    typeof window === "undefined" ? "http://localhost:20128" : window.location.origin
+export default function HomePageClient({
+  initialOrigin,
+}: {
+  machineId?: string;
+  /** Origin of the incoming request, resolved on the server. */
+  initialOrigin?: string;
+}) {
+  // Hydrate with the value the server rendered, then switch to the browser's origin. Reading
+  // window in a useState initializer made the client disagree with the server HTML, and
+  // React keeps the server text in that case — the page kept showing port 20128 on any
+  // other port or host. useSyncExternalStore re-renders with the browser value once
+  // hydration is done.
+  const origin = useSyncExternalStore(
+    subscribeToNothing,
+    getBrowserOrigin,
+    () => initialOrigin || FALLBACK_ORIGIN
   );
   const [stats, setStats] = useState<Stats>(EMPTY_STATS);
   const [snippet, setSnippet] = useState<"curl" | "python" | "node">("curl");
@@ -87,7 +107,10 @@ export default function HomePageClient(_props: { machineId?: string }) {
       getJson("/api/providers"),
       getJson("/api/keys"),
       getJson("/api/combos"),
-      getJson("/api/models"),
+      // The catalog apps actually see (also what API Manager and Playground count).
+      // /api/models only lists built-in registry models, so a custom OpenAI-compatible
+      // provider with imported models showed up here as 0 models.
+      getJson("/v1/models"),
       getJson("/api/usage/analytics?range=24h"),
     ]).then(([providers, keys, combos, models, usage]) => {
       setStats({
@@ -169,10 +192,7 @@ console.log(reply.choices[0].message.content);`,
             </p>
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <code
-              suppressHydrationWarning
-              className="flex-1 truncate rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-text-main"
-            >
+            <code className="flex-1 truncate rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-text-main">
               {baseUrl}
             </code>
             <CopyButton value={baseUrl} label="Copy URL" />
@@ -198,10 +218,7 @@ console.log(reply.choices[0].message.content);`,
               </div>
               <CopyButton value={snippets[snippet]} />
             </div>
-            <pre
-              suppressHydrationWarning
-              className="overflow-x-auto bg-bg p-4 font-mono text-[12.5px] leading-relaxed text-text-main"
-            >
+            <pre className="overflow-x-auto bg-bg p-4 font-mono text-[12.5px] leading-relaxed text-text-main">
               {snippets[snippet]}
             </pre>
           </div>

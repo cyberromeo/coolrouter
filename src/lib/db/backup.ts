@@ -15,22 +15,41 @@ import {
   DATA_DIR,
 } from "./core";
 import { resetAllDbModuleState } from "./stateReset";
+import { invalidateDbCache } from "./readCache";
 
 type CountRow = { cnt?: number };
 
 // ──────────────── Backup Config ────────────────
 
-let _lastBackupAt = 0;
+// Throttle state lives on globalThis: Next bundles this module separately for the route
+// handlers, the proxy middleware and instrumentation, and with a module-level variable each
+// copy took its own "hourly" snapshot within seconds of the others.
+declare global {
+  var __coolrouterLastDbBackupAt: number | undefined;
+}
+
+function getLastBackupAt(): number {
+  return globalThis.__coolrouterLastDbBackupAt ?? 0;
+}
+
+function setLastBackupAt(at: number) {
+  globalThis.__coolrouterLastDbBackupAt = at;
+}
 const BACKUP_THROTTLE_MS = 60 * 60 * 1000; // 60 minutes
 const MAX_DB_BACKUPS = 20;
 const TRUE_ENV_VALUES = new Set(["1", "true", "yes", "on"]);
 
 function isSqliteAutoBackupDisabled() {
+  // Detect an actual test run. This used to be `argv.some(a => a.includes("test"))`, which
+  // also matched any install or checkout path containing those letters (C:\Users\tester\…,
+  // /srv/coolrouter/latest/…) and silently switched off every automatic backup there.
   const isTest =
     typeof process !== "undefined" &&
     (process.env.NODE_ENV === "test" ||
       process.env.VITEST !== undefined ||
-      process.argv.some((a) => a.includes("test")));
+      process.env.NODE_TEST_CONTEXT !== undefined ||
+      process.execArgv.some((a) => a === "--test" || a.startsWith("--test=")) ||
+      process.argv.slice(1).some((a) => /\.(test|spec)\.[cm]?[jt]sx?$/.test(a)));
   if (isTest) return true;
 
   const value = process.env.DISABLE_SQLITE_AUTO_BACKUP;
@@ -67,6 +86,100 @@ export async function unlinkFileWithRetry(
   }
 }
 
+/** Block the thread for `ms` — only for the short, deliberately synchronous DB swap below. */
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/**
+ * Run a filesystem operation, retrying on EBUSY/EPERM without yielding to the event loop
+ * (Windows can hold a just-closed file for a moment: antivirus, indexer). Same policy as
+ * unlinkFileWithRetry, but synchronous so the DB swap below cannot be interleaved.
+ */
+function retrySyncWhileBusy(operation: () => void, maxAttempts = 10, baseDelayMs = 100) {
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      operation();
+      return;
+    } catch (err: unknown) {
+      const code =
+        err && typeof err === "object" && "code" in err ? (err as NodeJS.ErrnoException).code : "";
+      if ((code === "EBUSY" || code === "EPERM") && attempt < maxAttempts - 1) {
+        sleepSync(baseDelayMs * (attempt + 1));
+      } else {
+        throw err;
+      }
+    }
+  }
+}
+
+/**
+ * Logical size of the live database in bytes (page_count × page_size).
+ *
+ * In WAL mode the main file can stay at a single 4 KB page until the next checkpoint
+ * while all the data lives in storage.sqlite-wal, so the on-disk size of the main file
+ * says nothing about how much data a backup would contain.
+ */
+export function getLiveDbSizeBytes(fileSizeBytes: number): number {
+  try {
+    const db = getDbInstance();
+    const pageCount = Number(db.pragma("page_count", { simple: true }));
+    const pageSize = Number(db.pragma("page_size", { simple: true }));
+    const logicalSize = pageCount * pageSize;
+    return Number.isFinite(logicalSize) && logicalSize > fileSizeBytes
+      ? logicalSize
+      : fileSizeBytes;
+  } catch {
+    return fileSizeBytes;
+  }
+}
+
+/**
+ * Opening a backup read-only leaves `-shm` / empty `-wal` sidecars next to it (the
+ * snapshot header says WAL, and a read-only connection cannot remove them on close).
+ * Nothing ever reads or rotates them, so drop them once the handle is closed.
+ */
+function removeStaleSidecars(sqlitePath: string) {
+  try {
+    const walPath = `${sqlitePath}-wal`;
+    if (fs.existsSync(walPath)) {
+      if (fs.statSync(walPath).size > 0) return; // real WAL content: leave everything alone
+      fs.unlinkSync(walPath);
+    }
+    const shmPath = `${sqlitePath}-shm`;
+    if (fs.existsSync(shmPath)) fs.unlinkSync(shmPath);
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Create a snapshot right now and wait until it is completely written.
+ *
+ * backupDbFile() only *starts* a backup (and throttles it), which is useless as a safety
+ * net in front of a destructive operation: the connection is closed, or the data already
+ * rewritten, before the first page is copied. Restore/import flows use this instead.
+ * Honors DISABLE_SQLITE_AUTO_BACKUP like the other automatic backups.
+ */
+export async function createDbBackupAndWait(reason: string): Promise<string | null> {
+  if (isBuildPhase || isCloud) return null;
+  if (isSqliteAutoBackupDisabled()) return null;
+  if (!SQLITE_FILE || !fs.existsSync(SQLITE_FILE)) return null;
+  if (getLiveDbSizeBytes(fs.statSync(SQLITE_FILE).size) < 4096) return null;
+
+  const backupDir = DB_BACKUPS_DIR || path.join(DATA_DIR, "db_backups");
+  if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
+
+  const backupPath = path.join(
+    backupDir,
+    `db_${new Date().toISOString().replace(/[:.]/g, "-")}_${reason}.sqlite`
+  );
+  await getDbInstance().backup(backupPath);
+  setLastBackupAt(Date.now());
+  console.log(`[DB] Backup created: ${backupPath}`);
+  return backupPath;
+}
+
 // ──────────────── Backup ────────────────
 
 export function backupDbFile(reason = "auto") {
@@ -75,31 +188,36 @@ export function backupDbFile(reason = "auto") {
     if (!SQLITE_FILE || !fs.existsSync(SQLITE_FILE)) return null;
     if (reason !== "manual" && isSqliteAutoBackupDisabled()) return null;
 
-    const stat = fs.statSync(SQLITE_FILE);
-    if (stat.size < 4096) {
-      console.warn(`[DB] Backup SKIPPED — DB too small (${stat.size}B)`);
+    const dbSize = getLiveDbSizeBytes(fs.statSync(SQLITE_FILE).size);
+    if (dbSize < 4096) {
+      console.warn(`[DB] Backup SKIPPED — DB too small (${dbSize}B)`);
       return null;
     }
 
     // Throttle
     const now = Date.now();
-    if (reason !== "manual" && reason !== "pre-restore" && now - _lastBackupAt < BACKUP_THROTTLE_MS)
+    if (
+      reason !== "manual" &&
+      reason !== "pre-restore" &&
+      now - getLastBackupAt() < BACKUP_THROTTLE_MS
+    )
       return null;
-    _lastBackupAt = now;
+    setLastBackupAt(now);
 
     const backupDir = DB_BACKUPS_DIR || path.join(DATA_DIR, "db_backups");
     if (!fs.existsSync(backupDir)) fs.mkdirSync(backupDir, { recursive: true });
 
-    // Shrink check vs latest backup
+    // Shrink check vs latest backup. An explicit "Backup now" is never skipped: backups are
+    // separate files, so a smaller snapshot cannot overwrite a larger one.
     const existingBackups = fs
       .readdirSync(backupDir)
       .filter((f) => f.startsWith("db_") && f.endsWith(".sqlite"))
       .sort();
-    if (existingBackups.length > 0) {
+    if (reason !== "manual" && existingBackups.length > 0) {
       const latestBackup = existingBackups[existingBackups.length - 1];
       const latestStat = fs.statSync(path.join(backupDir, latestBackup));
-      if (latestStat.size > 4096 && stat.size < latestStat.size * 0.5) {
-        console.warn(`[DB] Backup SKIPPED — DB shrank from ${latestStat.size}B to ${stat.size}B`);
+      if (latestStat.size > 4096 && dbSize < latestStat.size * 0.5) {
+        console.warn(`[DB] Backup SKIPPED — DB shrank from ${latestStat.size}B to ${dbSize}B`);
         return null;
       }
     }
@@ -111,7 +229,7 @@ export function backupDbFile(reason = "auto") {
     const db = getDbInstance();
     db.backup(backupFile)
       .then(() => {
-        console.log(`[DB] Backup created: ${backupFile} (${stat.size} bytes)`);
+        console.log(`[DB] Backup created: ${backupFile} (${dbSize} bytes)`);
       })
       .catch((err: unknown) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -143,10 +261,11 @@ export function backupDbFile(reason = "auto") {
       } catch {
         /* gone */
       }
+      removeStaleSidecars(path.join(backupDir, files[smallestIdx]));
       files.splice(smallestIdx, 1);
     }
 
-    return { filename: path.basename(backupFile), size: stat.size };
+    return { filename: path.basename(backupFile), size: dbSize };
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.error("[DB] Backup failed:", message);
@@ -174,15 +293,23 @@ export async function listDbBackups() {
       const reason = match ? match[2] : "unknown";
 
       let connectionCount = 0;
+      let backupDb: InstanceType<typeof Database> | null = null;
       try {
-        const backupDb = new Database(filePath, { readonly: true });
+        backupDb = new Database(filePath, { readonly: true });
         const row = backupDb.prepare("SELECT COUNT(*) as cnt FROM provider_connections").get() as
-          | CountRow
-          | undefined;
+          CountRow | undefined;
         connectionCount = row?.cnt || 0;
-        backupDb.close();
       } catch {
         /* ignore */
+      } finally {
+        // Always release the handle: a leaked one keeps the file locked on Windows, so a
+        // corrupt or half-written backup could never be rotated or deleted.
+        try {
+          backupDb?.close();
+        } catch {
+          /* ignore */
+        }
+        removeStaleSidecars(filePath);
       }
 
       return {
@@ -228,10 +355,10 @@ export async function restoreDbBackup(backupId: string) {
   }
 
   // Validate backup integrity
+  let testDb: InstanceType<typeof Database> | null = null;
   try {
-    const testDb = new Database(backupPath, { readonly: true });
+    testDb = new Database(backupPath, { readonly: true });
     const result = testDb.pragma("integrity_check") as Array<{ integrity_check?: string }>;
-    testDb.close();
     if (result[0]?.integrity_check !== "ok") {
       throw new Error("Backup integrity check failed");
     }
@@ -239,56 +366,82 @@ export async function restoreDbBackup(backupId: string) {
     if (e instanceof Error && e.message === "Backup integrity check failed") throw e;
     const message = e instanceof Error ? e.message : String(e);
     throw new Error(`Backup file is corrupt: ${message}`);
-  }
-
-  // Force pre-restore backup (bypass throttle) and await so the DB is not closed while backup runs
-  if (!isSqliteAutoBackupDisabled()) {
-    _lastBackupAt = 0;
-    const backupDirForPre = DB_BACKUPS_DIR || path.join(DATA_DIR, "db_backups");
-    if (SQLITE_FILE && fs.existsSync(SQLITE_FILE)) {
-      const stat = fs.statSync(SQLITE_FILE);
-      if (stat.size >= 4096) {
-        if (!fs.existsSync(backupDirForPre)) fs.mkdirSync(backupDirForPre, { recursive: true });
-        const preBackupPath = path.join(
-          backupDirForPre,
-          `db_${new Date().toISOString().replace(/[:.]/g, "-")}_pre-restore.sqlite`
-        );
-        const dbForBackup = getDbInstance();
-        await dbForBackup.backup(preBackupPath);
-        _lastBackupAt = Date.now();
-      }
+  } finally {
+    // Release the handle on every path; a leaked one keeps the file locked on Windows.
+    try {
+      testDb?.close();
+    } catch {
+      /* ignore */
     }
+    removeStaleSidecars(backupPath);
   }
 
-  // Close and reset current connection
-  resetDbInstance();
+  // Pre-restore backup, awaited so the DB is not closed while the backup runs
+  await createDbBackupAndWait("pre-restore");
 
-  // Clear all cached prepared statements and other state bound to the old connection
-  resetAllDbModuleState();
+  const counts = replaceLiveDbFile(backupPath);
 
+  console.log(`[DB] Restored backup: ${backupId} (${counts.connectionCount} connections)`);
+
+  return { restored: true, backupId, ...counts };
+}
+
+/**
+ * Replace the live database with a validated .sqlite upload (POST /api/db-backups/import).
+ * Takes an awaited pre-import snapshot first, then swaps the file the same way a restore does.
+ */
+export async function importDbFile(sourcePath: string) {
+  await createDbBackupAndWait("pre-import");
+  return replaceLiveDbFile(sourcePath);
+}
+
+/**
+ * Close the live connection, swap storage.sqlite for `sourcePath`, and reopen.
+ * Shared by restore and import so both get the Windows-safe unlink and the state reset.
+ *
+ * Everything between close and reopen is synchronous on purpose. Any DB access that gets
+ * to run in between (the auth middleware reads settings on every request, the dashboard
+ * polls, schedulers tick) would lazily reopen the singleton on the *old* file: on Windows
+ * the unlink then fails with EBUSY and the restore errors out, on POSIX the process keeps
+ * writing to the unlinked file and the restored data only shows up after a restart.
+ */
+function replaceLiveDbFile(sourcePath: string) {
   const sqliteFile = SQLITE_FILE;
   if (!sqliteFile) {
     throw new Error("SQLITE_FILE is unavailable in local backup restore");
   }
 
-  // On Windows, the file handle may be released asynchronously after close; give it a moment.
-  await sleep(500);
+  // Stage the replacement next to the live file first. Everything that can realistically
+  // fail (unreadable source, full disk) fails here, before the current database is touched.
+  const stagedFile = `${sqliteFile}.incoming`;
+  fs.copyFileSync(sourcePath, stagedFile);
 
-  // Remove main file and WAL sidecars to avoid stale frame replay after restore.
-  // Retry unlink on EBUSY/EPERM (Windows may hold the handle briefly).
-  const sqliteFilesToReplace = [
-    sqliteFile,
-    `${sqliteFile}-wal`,
-    `${sqliteFile}-shm`,
-    `${sqliteFile}-journal`,
-  ];
-  for (const filePath of sqliteFilesToReplace) {
-    if (!filePath) continue;
-    await unlinkFileWithRetry(filePath);
+  try {
+    // Close and reset current connection (checkpoints the WAL into the main file)
+    resetDbInstance();
+
+    // Clear all cached prepared statements and other state bound to the old connection
+    resetAllDbModuleState();
+    // ...and the TTL read caches, so settings/connections of the replaced DB are not served
+    invalidateDbCache();
+
+    // Drop the sidecars so no stale WAL frames are replayed over the replacement.
+    for (const sidecar of [`${sqliteFile}-wal`, `${sqliteFile}-shm`, `${sqliteFile}-journal`]) {
+      retrySyncWhileBusy(() => {
+        if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar);
+      });
+    }
+
+    // Atomically swap the main file. If this fails the old database is still complete.
+    retrySyncWhileBusy(() => fs.renameSync(stagedFile, sqliteFile));
+  } catch (err) {
+    try {
+      if (fs.existsSync(stagedFile)) fs.unlinkSync(stagedFile);
+    } catch {
+      /* best effort */
+    }
+    throw err;
   }
-
-  // Copy backup over current DB
-  fs.copyFileSync(backupPath, sqliteFile);
 
   // Reopen
   const db = getDbInstance();
@@ -303,11 +456,7 @@ export async function restoreDbBackup(backupId: string) {
   const keyCount =
     (db.prepare("SELECT COUNT(*) as cnt FROM api_keys").get() as CountRow | undefined)?.cnt || 0;
 
-  console.log(`[DB] Restored backup: ${backupId} (${connCount} connections)`);
-
   return {
-    restored: true,
-    backupId,
     connectionCount: connCount,
     nodeCount,
     comboCount,

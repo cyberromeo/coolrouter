@@ -60,7 +60,10 @@ function validateImageData(base64Data: string, contentType: string): boolean {
   return true;
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+  // NextResponse.redirect() throws on relative URLs, which turned every fallback into a 500
+  const fallback = () => NextResponse.redirect(new URL("/favicon.svg", request.url));
+
   try {
     const settings = await getSettings();
 
@@ -116,12 +119,12 @@ export async function GET() {
     }
 
     if (!faviconData) {
-      return NextResponse.redirect("/favicon.svg");
+      return fallback();
     }
 
     const match = faviconData.match(/^data:([^;]+);base64,(.+)$/);
     if (!match) {
-      return NextResponse.redirect("/favicon.svg");
+      return fallback();
     }
 
     const contentType = match[1];
@@ -136,6 +139,6 @@ export async function GET() {
     });
   } catch (error) {
     console.error("Favicon API error:", error);
-    return NextResponse.redirect("/favicon.svg");
+    return fallback();
   }
 }

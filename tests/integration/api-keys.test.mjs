@@ -151,7 +151,7 @@ test("POST /api/keys validates missing and oversized names", async () => {
   assert.equal(oversizedName.status, 400);
 });
 
-test("POST /api/keys returns a server error for malformed JSON payloads", async () => {
+test("POST /api/keys rejects malformed JSON payloads with 400", async () => {
   await enableManagementAuth();
   const authKey = await createManagementKey();
 
@@ -167,8 +167,8 @@ test("POST /api/keys returns a server error for malformed JSON payloads", async 
   );
   const body = await response.json();
 
-  assert.equal(response.status, 500);
-  assert.equal(body.error, "Failed to create key");
+  assert.equal(response.status, 400);
+  assert.ok(body.error);
 });
 
 test("GET /api/keys lists masked keys with pagination and GET /api/keys/[id] stays masked", async () => {

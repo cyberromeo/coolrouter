@@ -1,13 +1,16 @@
 import { NextResponse } from "next/server";
-import { jwtVerify, SignJWT } from "jose";
+import { jwtVerify } from "jose";
 import { generateRequestId } from "./shared/utils/requestId";
-import { getSettings } from "./lib/localDb";
 import { isPublicRoute, verifyAuth, isAuthRequired } from "./shared/utils/apiAuth";
+import {
+  AUTH_COOKIE_NAME,
+  createSessionToken,
+  getSessionCookieOptions,
+  getSessionSecret,
+} from "./shared/utils/authSession";
 import { checkBodySize, getBodySizeLimit } from "./shared/middleware/bodySizeGuard";
 import { isDraining } from "./lib/gracefulShutdown";
 import { isModelSyncInternalRequest } from "./shared/services/modelSyncScheduler";
-
-const SECRET = new TextEncoder().encode(process.env.JWT_SECRET || "");
 
 export async function proxy(request: any) {
   const { pathname } = request.nextUrl;
@@ -38,8 +41,8 @@ export async function proxy(request: any) {
   }
 
   // ──────────────── Protect Management API Routes ────────────────
-  if (pathname.startsWith("/api/") && !pathname.startsWith("/api/v1/")) {
-    // Allow public routes (login, logout, health, etc.)
+  if (pathname.startsWith("/api/")) {
+    // Allow public routes (login, logout, health, the LLM proxy surface, etc.)
     if (isPublicRoute(pathname)) {
       return response;
     }
@@ -76,37 +79,23 @@ export async function proxy(request: any) {
 
   // ──────────────── Protect Dashboard Routes ────────────────
   if (pathname.startsWith("/dashboard")) {
-    // Always allow onboarding — it has its own setupComplete guard
-    if (pathname.startsWith("/dashboard/onboarding")) {
+    // Same rule as the management API (isAuthRequired): login is skipped when it is
+    // turned off, or when no password exists yet — a fresh install heading into the
+    // setup wizard, or one where the password step was skipped. There is nothing to sign
+    // in with in that state, so sending the visitor to /login would only lock them out
+    // of the page where a password can be set. On a settings read error it stays locked.
+    if (!(await isAuthRequired())) {
       return response;
     }
 
-    try {
-      // Direct import — no HTTP self-fetch overhead
-      const settings = await getSettings();
-      // Skip auth if login is not required
-      if (settings.requireLogin === false) {
-        return response;
-      }
-      // Skip auth ONLY for fresh installs (before onboarding) where no password exists yet.
-      // Once setupComplete is true, always require auth — prevents bypass if password row is lost (#151)
-      if (!settings.setupComplete && !settings.password && !process.env.INITIAL_PASSWORD) {
-        return response;
-      }
-    } catch (err) {
-      // FASE-01: Log settings fetch errors instead of silencing them
-      console.error("[Middleware] settings_error: Settings read failed:", err.message, {
-        path: pathname,
-        requestId,
-      });
-      // On error, require login (fall through to token check)
-    }
+    const token = request.cookies.get(AUTH_COOKIE_NAME)?.value;
+    // Read the secret per request: it may have been generated at startup, after this
+    // module was first evaluated.
+    const secret = getSessionSecret();
 
-    const token = request.cookies.get("auth_token")?.value;
-
-    if (token) {
+    if (token && secret) {
       try {
-        const { payload } = await jwtVerify(token, SECRET);
+        const { payload } = await jwtVerify(token, secret);
 
         // Auto-refresh: if token expires within 7 days, issue a fresh 30-day token
         const exp = payload.exp as number;
@@ -114,25 +103,8 @@ export async function proxy(request: any) {
         const REFRESH_WINDOW = 7 * 24 * 60 * 60; // 7 days in seconds
         if (exp && exp - now < REFRESH_WINDOW) {
           try {
-            const freshToken = await new SignJWT({ authenticated: true })
-              .setProtectedHeader({ alg: "HS256" })
-              .setExpirationTime("30d")
-              .sign(SECRET);
-
-            // Detect secure context
-            const fwdProto = (request.headers.get("x-forwarded-proto") || "")
-              .split(",")[0]
-              .trim()
-              .toLowerCase();
-            const isHttps = fwdProto === "https" || request.nextUrl?.protocol === "https:";
-            const useSecure = process.env.AUTH_COOKIE_SECURE === "true" || isHttps;
-
-            response.cookies.set("auth_token", freshToken, {
-              httpOnly: true,
-              secure: useSecure,
-              sameSite: "lax",
-              path: "/",
-            });
+            const freshToken = await createSessionToken();
+            response.cookies.set(AUTH_COOKIE_NAME, freshToken, getSessionCookieOptions(request));
             console.log(
               `[Middleware] JWT auto-refreshed for ${pathname} (was expiring in ${Math.round((exp - now) / 3600)}h)`
             );
@@ -151,7 +123,7 @@ export async function proxy(request: any) {
           requestId,
         });
         const redirectResponse = NextResponse.redirect(new URL("/login", request.url));
-        redirectResponse.cookies.delete("auth_token");
+        redirectResponse.cookies.delete(AUTH_COOKIE_NAME);
         return redirectResponse;
       }
     }

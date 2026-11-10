@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { readApiError } from "@/shared/utils/apiErrorMessage";
 
 export interface ModelMapping {
   id: string;
@@ -22,29 +23,33 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  // Form state
+  // Form state. Priority is kept as typed: converting on every keystroke turned "-" or an
+  // emptied field into 0, so a negative or retyped number could not be entered.
   const [pattern, setPattern] = useState("");
   const [comboId, setComboId] = useState("");
-  const [priority, setPriority] = useState(0);
+  const [priority, setPriority] = useState("0");
   const [description, setDescription] = useState("");
 
-  const loadMappings = async () => {
+  /** Returns null when the list could not be loaded (so the caller keeps what it has). */
+  const loadMappings = async (): Promise<ModelMapping[] | null> => {
     try {
       const res = await fetch("/api/model-combo-mappings");
       if (res.ok) {
         const data = await res.json();
-        return data.mappings || [];
+        return Array.isArray(data?.mappings) ? data.mappings : [];
       }
     } catch {}
-    return [];
+    return null;
   };
 
   useEffect(() => {
     let cancelled = false;
     loadMappings().then((data) => {
       if (!cancelled) {
-        setMappings(data);
+        setMappings(data || []);
         setLoading(false);
       }
     });
@@ -55,59 +60,90 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
 
   const refetchMappings = async () => {
     const data = await loadMappings();
-    setMappings(data);
+    if (data) setMappings(data);
   };
 
   const resetForm = () => {
     setPattern("");
     setComboId("");
-    setPriority(0);
+    setPriority("0");
     setDescription("");
     setAdding(false);
     setEditingId(null);
+    setError(null);
   };
 
   const handleSave = async () => {
-    if (!pattern.trim() || !comboId) return;
+    if (!pattern.trim() || !comboId || saving) return;
 
+    const priorityValue = priority.trim() === "" ? 0 : Number(priority);
+    if (!Number.isInteger(priorityValue)) {
+      setError("Priority must be a whole number.");
+      return;
+    }
+
+    setSaving(true);
+    setError(null);
     try {
-      if (editingId) {
-        const res = await fetch(`/api/model-combo-mappings/${editingId}`, {
-          method: "PUT",
+      const body = JSON.stringify({
+        pattern: pattern.trim(),
+        comboId,
+        priority: priorityValue,
+        description,
+      });
+      const res = await fetch(
+        editingId ? `/api/model-combo-mappings/${editingId}` : "/api/model-combo-mappings",
+        {
+          method: editingId ? "PUT" : "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern: pattern.trim(), comboId, priority, description }),
-        });
-        if (res.ok) await refetchMappings();
-      } else {
-        const res = await fetch("/api/model-combo-mappings", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ pattern: pattern.trim(), comboId, priority, description }),
-        });
-        if (res.ok) await refetchMappings();
+          body,
+        }
+      );
+      if (!res.ok) {
+        // Keep the form open with what was typed. It used to close as if the rule had been
+        // saved, while the server had rejected it.
+        setError(await readApiError(res, "Failed to save the routing rule"));
+        return;
       }
-    } catch {}
-    resetForm();
+      await refetchMappings();
+      resetForm();
+    } catch {
+      setError("Failed to save the routing rule");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleEdit = (m: ModelMapping) => {
     setPattern(m.pattern);
     setComboId(m.comboId);
-    setPriority(m.priority);
-    setDescription(m.description);
+    setPriority(String(m.priority ?? 0));
+    setDescription(m.description || "");
     setEditingId(m.id);
+    setError(null);
     setAdding(true);
   };
 
   const handleDelete = async (id: string) => {
     if (!confirm("Delete this model routing rule?")) return;
+    setError(null);
     try {
-      await fetch(`/api/model-combo-mappings/${id}`, { method: "DELETE" });
+      const res = await fetch(`/api/model-combo-mappings/${id}`, { method: "DELETE" });
+      // 404: already gone, which is what was asked for. Anything else: the rule still
+      // exists on the server, so it must not vanish from the list.
+      if (!res.ok && res.status !== 404) {
+        setError(await readApiError(res, "Failed to delete the routing rule"));
+        return;
+      }
       setMappings((prev) => prev.filter((m) => m.id !== id));
-    } catch {}
+      if (editingId === id) resetForm();
+    } catch {
+      setError("Failed to delete the routing rule");
+    }
   };
 
   const handleToggle = async (m: ModelMapping) => {
+    setError(null);
     try {
       const res = await fetch(`/api/model-combo-mappings/${m.id}`, {
         method: "PUT",
@@ -116,8 +152,12 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
       });
       if (res.ok) {
         setMappings((prev) => prev.map((x) => (x.id === m.id ? { ...x, enabled: !x.enabled } : x)));
+      } else {
+        setError(await readApiError(res, "Failed to update the routing rule"));
       }
-    } catch {}
+    } catch {
+      setError("Failed to update the routing rule");
+    }
   };
 
   return (
@@ -143,6 +183,12 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
           </button>
         )}
       </div>
+
+      {error && (
+        <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">
+          {error}
+        </p>
+      )}
 
       {/* Inline form */}
       {adding && (
@@ -187,8 +233,9 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
               </label>
               <input
                 type="number"
+                step={1}
                 value={priority}
-                onChange={(e) => setPriority(Number(e.target.value))}
+                onChange={(e) => setPriority(e.target.value)}
                 className="w-full mt-0.5 px-2.5 py-1.5 text-xs rounded-lg border border-black/10 dark:border-white/10
                            bg-white dark:bg-black/20 focus:outline-none focus:ring-1 focus:ring-primary"
               />
@@ -212,7 +259,7 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
           <div className="flex items-center gap-2 mt-2.5">
             <button
               onClick={handleSave}
-              disabled={!pattern.trim() || !comboId}
+              disabled={!pattern.trim() || !comboId || saving}
               className="px-3 py-1 text-xs font-medium rounded-lg bg-primary text-primary-foreground
                          hover:bg-primary/90 disabled:opacity-40 transition-colors"
             >
@@ -262,7 +309,7 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
                 </code>
                 <span className="text-text-muted text-[10px]">→</span>
                 <span className="text-xs font-medium text-primary truncate">
-                  {m.comboName || m.comboId.slice(0, 8)}
+                  {m.comboName || String(m.comboId || "").slice(0, 8)}
                 </span>
                 {m.description && (
                   <span className="text-[10px] text-text-muted truncate hidden sm:inline">
@@ -278,6 +325,8 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
                   onClick={() => handleToggle(m)}
                   className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   title={m.enabled ? "Disable" : "Enable"}
+                  aria-label={`${m.enabled ? "Disable" : "Enable"} rule ${m.pattern}`}
+                  aria-pressed={m.enabled}
                 >
                   <span
                     className={`material-symbols-outlined text-[14px] ${m.enabled ? "text-emerald-500" : "text-text-muted"}`}
@@ -289,6 +338,7 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
                   onClick={() => handleEdit(m)}
                   className="p-1 rounded hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                   title="Edit"
+                  aria-label={`Edit rule ${m.pattern}`}
                 >
                   <span className="material-symbols-outlined text-[14px] text-text-muted">
                     edit
@@ -298,6 +348,7 @@ export default function ModelRoutingSection({ combos = [] }: { combos?: Combo[] 
                   onClick={() => handleDelete(m.id)}
                   className="p-1 rounded hover:bg-red-500/10 transition-colors"
                   title="Delete"
+                  aria-label={`Delete rule ${m.pattern}`}
                 >
                   <span className="material-symbols-outlined text-[14px] text-red-500">delete</span>
                 </button>

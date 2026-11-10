@@ -1645,3 +1645,239 @@ test("chatCore maps upstream aborts to request-aborted errors", async () => {
   assert.equal(result.status, 499);
   assert.equal(result.error, "Request aborted");
 });
+
+// ── Client-format contracts (0.1.2): stream default, Responses objects, cache keys ──
+
+// Executors send "Accept" with varying header-name casing.
+function upstreamAccept(call) {
+  const entry = Object.entries(call?.headers || {}).find(
+    ([name]) => name.toLowerCase() === "accept"
+  );
+  return String(entry?.[1] || "");
+}
+
+function respondInRequestedMode(captured) {
+  return buildOpenAIResponse(upstreamAccept(captured).includes("text/event-stream"));
+}
+
+function echoLastUserMessage(captured) {
+  const messages = captured.body?.messages || [];
+  const last = messages[messages.length - 1];
+  return new Response(
+    JSON.stringify({
+      id: "chatcmpl-echo",
+      object: "chat.completion",
+      model: "gpt-4o-mini",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: `echo:${last?.content}` },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    }),
+    { status: 200, headers: { "Content-Type": "application/json" } }
+  );
+}
+
+test("chatCore treats an omitted stream as non-streaming for OpenAI, Claude and Responses clients", async () => {
+  const cases = [
+    {
+      endpoint: "/v1/chat/completions",
+      body: { model: "gpt-4o-mini", messages: [{ role: "user", content: "hi" }] },
+    },
+    {
+      endpoint: "/v1/messages",
+      body: { model: "gpt-4o-mini", max_tokens: 64, messages: [{ role: "user", content: "hi" }] },
+    },
+    { endpoint: "/v1/responses", body: { model: "gpt-4o-mini", input: "hi" } },
+  ];
+
+  for (const { endpoint, body } of cases) {
+    // curl / fetch / Python requests: wildcard Accept, no `stream` in the body.
+    const { call, result } = await invokeChatCore({
+      endpoint,
+      body,
+      accept: "*/*",
+      responseFactory: respondInRequestedMode,
+    });
+
+    assert.equal(result.success, true, endpoint);
+    assert.equal(
+      upstreamAccept(call).includes("text/event-stream"),
+      false,
+      `${endpoint} must not ask the upstream for SSE`
+    );
+    assert.notEqual(call.body.stream, true, endpoint);
+    assert.match(result.response.headers.get("Content-Type"), /application\/json/, endpoint);
+  }
+});
+
+test("chatCore streams when stream is omitted but the client accepts text/event-stream", async () => {
+  for (const endpoint of ["/v1/chat/completions", "/v1/messages"]) {
+    const { call, result } = await invokeChatCore({
+      endpoint,
+      accept: "text/event-stream",
+      body: { model: "gpt-4o-mini", max_tokens: 64, messages: [{ role: "user", content: "hi" }] },
+      responseFactory: respondInRequestedMode,
+    });
+
+    assert.equal(result.success, true, endpoint);
+    assert.match(upstreamAccept(call), /text\/event-stream/, endpoint);
+    assert.match(result.response.headers.get("Content-Type"), /text\/event-stream/, endpoint);
+    await result.response.text();
+  }
+});
+
+test("chatCore keeps the streaming default for formats that carry no stream field", async () => {
+  // A Gemini-format body: the URL picks the mode, the body has no `stream`.
+  const { call, result } = await invokeChatCore({
+    endpoint: "",
+    accept: "*/*",
+    body: { model: "gpt-4o-mini", contents: [{ role: "user", parts: [{ text: "hi" }] }] },
+    responseFactory: respondInRequestedMode,
+  });
+
+  assert.equal(result.success, true);
+  assert.match(upstreamAccept(call), /text\/event-stream/);
+  assert.equal(call.body.stream, true);
+  await result.response.text();
+});
+
+test("chatCore answers non-streaming /v1/responses requests with a Responses object", async () => {
+  const { call, result } = await invokeChatCore({
+    endpoint: "/v1/responses",
+    accept: "*/*",
+    body: { model: "gpt-4o-mini", input: "hi from responses", instructions: "be nice" },
+  });
+
+  assert.equal(result.success, true);
+  // The plain-string input reaches the upstream as the user turn, after the instructions.
+  assert.deepEqual(
+    call.body.messages.map((message) => [message.role, message.content]),
+    [
+      ["system", "be nice"],
+      ["user", "hi from responses"],
+    ]
+  );
+  assert.equal("input" in call.body, false);
+
+  const payload = await result.response.json();
+  assert.equal(payload.object, "response");
+  assert.equal(payload.status, "completed");
+  assert.match(payload.id, /^resp_/);
+  assert.equal("choices" in payload, false);
+  assert.equal(payload.output.length, 1);
+  assert.equal(payload.output[0].type, "message");
+  assert.equal(payload.output[0].role, "assistant");
+  assert.deepEqual(payload.output[0].content, [
+    { type: "output_text", text: "ok", annotations: [] },
+  ]);
+  assert.equal(payload.usage.output_tokens, 2);
+  assert.equal(
+    payload.usage.total_tokens,
+    payload.usage.input_tokens + payload.usage.output_tokens
+  );
+});
+
+test("chatCore returns native Responses payloads intact for non-streaming Responses clients", async () => {
+  const { call, result } = await invokeChatCore({
+    provider: "openai-compatible-sp-openai",
+    model: "gpt-5.4",
+    endpoint: "/v1/responses",
+    credentials: {
+      apiKey: "sk-test",
+      providerSpecificData: {
+        apiType: "responses",
+        baseUrl: "https://proxy.example.com/v1",
+        prefix: "sp-openai",
+      },
+    },
+    body: { model: "gpt-5.4", input: "hello", stream: false },
+    responseFormat: "openai-responses",
+  });
+
+  assert.equal(result.success, true);
+  assert.match(call.url, /\/responses$/);
+
+  const payload = await result.response.json();
+  assert.equal(payload.object, "response");
+  assert.equal(payload.id, "resp_123");
+  assert.equal("choices" in payload, false);
+  assert.deepEqual(payload.output, [
+    {
+      id: "msg_123",
+      type: "message",
+      role: "assistant",
+      content: [{ type: "output_text", text: "ok", annotations: [] }],
+    },
+  ]);
+  assert.equal(payload.usage.output_tokens, 2);
+  assert.equal(
+    payload.usage.total_tokens,
+    payload.usage.input_tokens + payload.usage.output_tokens
+  );
+});
+
+test("chatCore keeps semantic cache entries apart for different Responses inputs", async () => {
+  const ask = (input) =>
+    invokeChatCore({
+      endpoint: "/v1/responses",
+      body: { model: "gpt-4o-mini", input, stream: false },
+      responseFactory: echoLastUserMessage,
+    });
+
+  const first = await ask("first question");
+  const second = await ask("second question");
+  const firstAgain = await ask("first question");
+
+  const firstPayload = await first.result.response.json();
+  const secondPayload = await second.result.response.json();
+  const firstAgainPayload = await firstAgain.result.response.json();
+
+  assert.equal(first.calls.length, 1);
+  assert.equal(firstPayload.output[0].content[0].text, "echo:first question");
+
+  // A different input must reach the provider instead of replaying the first answer.
+  assert.equal(second.calls.length, 1);
+  assert.equal(second.result.response.headers.get("X-CoolRouter-Cache"), "MISS");
+  assert.equal(secondPayload.output[0].content[0].text, "echo:second question");
+
+  // The identical request is still served from the cache, in the Responses shape.
+  assert.equal(firstAgain.calls.length, 0);
+  assert.equal(firstAgain.result.response.headers.get("X-CoolRouter-Cache"), "HIT");
+  assert.deepEqual(firstAgainPayload, firstPayload);
+});
+
+test("chatCore does not share semantic cache entries across client formats or system prompts", async () => {
+  const messages = [{ role: "user", content: "same question" }];
+
+  const openai = await invokeChatCore({
+    endpoint: "/v1/chat/completions",
+    body: { model: "gpt-4o-mini", stream: false, messages },
+    responseFactory: echoLastUserMessage,
+  });
+  const claude = await invokeChatCore({
+    endpoint: "/v1/messages",
+    body: { model: "gpt-4o-mini", max_tokens: 64, stream: false, messages },
+    responseFactory: echoLastUserMessage,
+  });
+  const claudeOtherSystem = await invokeChatCore({
+    endpoint: "/v1/messages",
+    body: { model: "gpt-4o-mini", max_tokens: 64, stream: false, system: "Be terse.", messages },
+    responseFactory: echoLastUserMessage,
+  });
+
+  const openaiPayload = await openai.result.response.json();
+  const claudePayload = await claude.result.response.json();
+  await claudeOtherSystem.result.response.json();
+
+  assert.equal(openaiPayload.object, "chat.completion");
+  // The Claude client gets a Claude message, not the cached OpenAI payload.
+  assert.equal(claude.calls.length, 1);
+  assert.equal(claudePayload.type, "message");
+  assert.equal(claudePayload.content[0].text, "echo:same question");
+  // A different system prompt is a different request.
+  assert.equal(claudeOtherSystem.calls.length, 1);
+});

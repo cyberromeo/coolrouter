@@ -19,15 +19,28 @@ export async function GET() {
 
 // POST /api/combos - Create new combo
 export async function POST(request) {
+  let body;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        error: {
+          message: "Invalid request",
+          details: [{ field: "body", message: "Invalid JSON body" }],
+        },
+      },
+      { status: 400 }
+    );
+  }
 
+  try {
     // Zod validation (covers name format, length, etc.)
     const validation = validateBody(createComboSchema, body);
     if (isValidationFailure(validation)) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
-    const { name, models, strategy, config } = validation.data;
+    const { name, models, strategy, config, ...agentFields } = validation.data;
 
     // Check if name already exists
     const existing = await getComboByName(name);
@@ -45,7 +58,16 @@ export async function POST(request) {
       return NextResponse.json({ error: dagError.message }, { status: 400 });
     }
 
-    const combo = await createCombo({ name, models: models || [], strategy, config });
+    // allowedProviders, system_message, tool_filter_regex, context_cache_protection and
+    // context_length pass validation above; without forwarding them a combo created with
+    // agent settings silently lost them.
+    const combo = await createCombo({
+      name,
+      models: models || [],
+      strategy,
+      config,
+      ...agentFields,
+    });
 
     // Auto sync to Cloud if enabled
     await syncToCloudIfEnabled();

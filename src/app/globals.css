@@ -13,6 +13,9 @@
 
 /* Cool Router — monochrome "Vercel-style" palette */
 :root {
+  /* Native controls (scrollbars, checkboxes, select menus, autofill) follow the theme */
+  color-scheme: light;
+
   --desktop-safe-top: 0px;
   --desktop-safe-bottom: 0px;
 
@@ -53,6 +56,8 @@
 }
 
 .dark {
+  color-scheme: dark;
+
   --color-primary: #ededed;
   --color-primary-hover: #ffffff;
   --color-primary-foreground: #0a0a0a;
@@ -175,6 +180,39 @@ body {
 body.electron-macos {
   --desktop-safe-top: 30px;
   --desktop-safe-bottom: 8px;
+}
+
+/* ── Desktop app on macOS ──
+   The native title bar is hidden (traffic lights float over the page), so nothing would
+   move the window. `html.desktop-macos` is set by the Electron preload script on every
+   page. The strip along the top edge drags the window; interactive elements are carved
+   out of it so header buttons that reach into the strip stay clickable. It must be
+   ::before — drag regions are applied in document order and the carve-outs come later. */
+html.desktop-macos body::before {
+  content: "";
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 30px;
+  z-index: 70;
+  -webkit-app-region: drag;
+}
+
+html.desktop-macos
+  :is(
+    a,
+    button,
+    input,
+    select,
+    textarea,
+    label,
+    summary,
+    [role="button"],
+    [role="tab"],
+    [tabindex]
+  ) {
+  -webkit-app-region: no-drag;
 }
 
 /* Selection — with fallback for browsers that don't support color-mix() */
@@ -324,6 +362,39 @@ button .material-symbols-outlined,
 
 .animate-border-glow {
   animation: border-glow 2s ease-in-out infinite;
+}
+
+/* Entry animation. Modals, toasts, banners and menus are marked `animate-in`
+   (the tailwindcss-animate convention) but that plugin is not installed, so they used
+   to pop in with no transition at all. One short fade-and-settle covers them. */
+@keyframes cr-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-in {
+  animation: cr-enter 160ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-in,
+  .animate-pulse,
+  .animate-border-glow {
+    animation: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* macOS Vibrancy/Blur Effect */

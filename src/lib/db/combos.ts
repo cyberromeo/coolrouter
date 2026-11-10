@@ -69,12 +69,25 @@ export async function createCombo(data: JsonRecord) {
   const now = new Date().toISOString();
   const sortOrder = typeof data.sortOrder === "number" ? data.sortOrder : getNextSortOrder();
 
+  // Optional per-combo agent settings, stored only when the caller supplied them.
+  const optional: JsonRecord = {};
+  for (const key of [
+    "allowedProviders",
+    "system_message",
+    "tool_filter_regex",
+    "context_cache_protection",
+    "context_length",
+  ]) {
+    if (data[key] !== undefined) optional[key] = data[key];
+  }
+
   const combo = {
     id: uuidv4(),
     name: data.name,
     models: data.models || [],
     strategy: data.strategy || "priority",
     config: data.config || {},
+    ...optional,
     isHidden: Boolean(data.isHidden),
     sortOrder,
     createdAt: now,

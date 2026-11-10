@@ -9,6 +9,12 @@ import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 import { setCliCompatProviders } from "../../../../open-sse/config/cliFingerprints";
 import { getConsistentMachineId } from "@/shared/utils/machineId";
 import { validateProxyUrl, upsertUpstreamProxyConfig } from "@/lib/db/upstreamProxy";
+import {
+  AUTH_COOKIE_NAME,
+  createSessionToken,
+  getSessionCookieOptions,
+  getSessionSecret,
+} from "@/shared/utils/authSession";
 
 export async function GET() {
   try {
@@ -56,6 +62,8 @@ export async function PATCH(request) {
       return NextResponse.json({ error: validation.error }, { status: 400 });
     }
     const body: typeof validation.data & { password?: string } = { ...validation.data };
+    // True when this request creates the very first password (none in the DB, none in env).
+    let createdFirstPassword = false;
 
     // If updating password, hash it
     if (body.newPassword) {
@@ -97,6 +105,7 @@ export async function PATCH(request) {
           if (currentPassword !== "") {
             return NextResponse.json({ error: "Invalid current password" }, { status: 401 });
           }
+          createdFirstPassword = true;
         }
       }
 
@@ -174,7 +183,21 @@ export async function PATCH(request) {
     }
 
     const { password, ...safeSettings } = settings;
-    return NextResponse.json(safeSettings);
+    const response = NextResponse.json({
+      ...safeSettings,
+      hasPassword: !!password || !!process.env.INITIAL_PASSWORD,
+    });
+    // Until now there was nothing to sign in with, so the caller has no session. Creating
+    // the password turns the auth gate on for every later request — sign them in here or
+    // the page they are on starts failing with 401s.
+    if (createdFirstPassword && getSessionSecret()) {
+      response.cookies.set(
+        AUTH_COOKIE_NAME,
+        await createSessionToken(),
+        getSessionCookieOptions(request)
+      );
+    }
+    return response;
   } catch (error) {
     console.log("Error updating settings:", error);
     return NextResponse.json({ error: "Failed to update settings" }, { status: 500 });

@@ -34,8 +34,8 @@ const LOBEHUB_PROVIDER_MAP: Record<string, string> = {
   xai: "xai",
   grok: "xai",
   together: "togetherai",
-  fireworks: "fireworks",
-  "fireworks-ai": "fireworks",
+  fireworks: "fireworksai",
+  "fireworks-ai": "fireworksai",
   cerebras: "cerebras",
   huggingface: "huggingface",
   "hugging-face": "huggingface",
@@ -49,10 +49,9 @@ const LOBEHUB_PROVIDER_MAP: Record<string, string> = {
   kimi: "moonshot",
   baidu: "baidu",
   ernie: "baidu",
-  spark: "iflytek",
+  spark: "spark",
   "zhipu-ai": "zhipu",
   zhipu: "zhipu",
-  lmsys: "lmsys",
   "stability-ai": "stability",
   stability: "stability",
   replicate: "replicate",
@@ -68,9 +67,7 @@ const LOBEHUB_PROVIDER_MAP: Record<string, string> = {
   "github-copilot": "githubcopilot",
   mistralai: "mistral",
   codex: "openai",
-  blackbox: "blackboxai",
-  blackboxai: "blackboxai",
-  pollinations: "pollinations",
+  // blackbox / pollinations: Lobehub has no icon for them; the bundled PNGs below are used.
 };
 
 interface ProviderIconProps {
@@ -168,6 +165,7 @@ const KNOWN_PNGS = new Set([
   "perplexity-search",
   "perplexity",
   "pollinations",
+  "qoder",
   "qwen",
   "roo",
   "serper-search",
@@ -207,14 +205,21 @@ const KNOWN_SVGS = new Set([
   "zai",
 ]);
 
-const ProviderIcon = memo(function ProviderIcon({
+const ProviderIcon = memo(function ProviderIcon(props: ProviderIconProps) {
+  // Keyed by provider: the fallback state below ("Lobehub failed", "PNG failed") belongs to
+  // one provider. Reusing it when the same element gets another providerId (the header
+  // breadcrumb does that) showed the generic icon for a provider that has a logo.
+  return <ProviderIconInner key={String(props.providerId || "").toLowerCase()} {...props} />;
+});
+
+function ProviderIconInner({
   providerId,
   size = 24,
   type = "color",
   className,
   style,
 }: ProviderIconProps) {
-  const normalizedId = providerId.toLowerCase();
+  const normalizedId = String(providerId || "").toLowerCase();
   const lobehubId = LOBEHUB_PROVIDER_MAP[normalizedId] ?? null;
   const hasPng = KNOWN_PNGS.has(normalizedId);
   const hasSvg = KNOWN_SVGS.has(normalizedId);
@@ -282,7 +287,7 @@ const ProviderIcon = memo(function ProviderIcon({
       <GenericProviderIcon size={size} />
     </span>
   );
-});
+}
 
 export default ProviderIcon;
 export type { ProviderIconProps };

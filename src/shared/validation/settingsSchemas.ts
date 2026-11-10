@@ -9,7 +9,8 @@ import { z } from "zod";
 import { HIDEABLE_SIDEBAR_ITEM_IDS } from "@/shared/constants/sidebarVisibility";
 
 export const updateSettingsSchema = z.object({
-  newPassword: z.string().min(1).max(200).optional(),
+  // Same floor as the setup wizard and the reset-password CLI.
+  newPassword: z.string().min(4, "Password must be at least 4 characters").max(200).optional(),
   currentPassword: z.string().max(200).optional(),
   theme: z.string().max(50).optional(),
   language: z.string().max(10).optional(),
@@ -31,7 +32,15 @@ export const updateSettingsSchema = z.object({
   hiddenSidebarItems: z.array(z.enum(HIDEABLE_SIDEBAR_ITEM_IDS)).optional(),
   // Routing settings (#134)
   fallbackStrategy: z
-    .enum(["fill-first", "round-robin", "p2c", "random", "least-used", "cost-optimized"])
+    .enum([
+      "fill-first",
+      "round-robin",
+      "p2c",
+      "random",
+      "strict-random",
+      "least-used",
+      "cost-optimized",
+    ])
     .optional(),
   wildcardAliases: z.array(z.object({ pattern: z.string(), target: z.string() })).optional(),
   stickyRoundRobinLimit: z.number().int().min(0).max(1000).optional(),

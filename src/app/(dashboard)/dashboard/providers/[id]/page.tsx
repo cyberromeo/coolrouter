@@ -44,6 +44,7 @@ import {
 } from "@/shared/constants/modelCompat";
 import { resolveManagedModelAlias } from "@/shared/utils/providerModelAliases";
 import { maskEmail, pickMaskedDisplayValue } from "@/shared/utils/maskEmail";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 type CompatByProtocolMap = Partial<
   Record<
@@ -524,7 +525,8 @@ interface EditCompatibleNodeModalNode {
 interface EditCompatibleNodeModalProps {
   isOpen: boolean;
   node: EditCompatibleNodeModalNode | null;
-  onSave: (data: unknown) => Promise<void>;
+  /** Resolves to an error message to show in the modal, or null/undefined on success. */
+  onSave: (data: unknown) => Promise<string | null | void>;
   onClose: () => void;
   isAnthropic?: boolean;
   isCcCompatible?: boolean;
@@ -1049,21 +1051,25 @@ export default function ProviderDetailPage() {
     }
   }, [providerId, isCompatible]);
 
-  const handleUpdateNode = async (formData) => {
+  // Returns an error message for the modal to show, or null on success.
+  const handleUpdateNode = async (formData): Promise<string | null> => {
     try {
       const res = await fetch(`/api/provider-nodes/${providerId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(formData),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (res.ok) {
-        setProviderNode(data.node);
+        if (data?.node) setProviderNode(data.node);
         await fetchConnections();
         setShowEditNodeModal(false);
+        return null;
       }
+      return getApiErrorMessage(data, t("errorOccurred"));
     } catch (error) {
       console.log("Error updating provider node:", error);
+      return t("errorOccurred");
     }
   };
 
@@ -1123,8 +1129,8 @@ export default function ProviderDetailPage() {
       if (res.ok) {
         await fetchAliases();
       } else {
-        const data = await res.json();
-        alert(data.error || t("failedSetAlias"));
+        const data = await res.json().catch(() => null);
+        alert(getApiErrorMessage(data, t("failedSetAlias")));
       }
     } catch (error) {
       console.log("Error setting alias:", error);
@@ -1154,9 +1160,13 @@ export default function ProviderDetailPage() {
         if (providerId === "gemini") {
           await fetchProviderModelMeta();
         }
+      } else {
+        const data = await res.json().catch(() => null);
+        notify.error(getApiErrorMessage(data, t("errorOccurred")));
       }
     } catch (error) {
       console.log("Error deleting connection:", error);
+      notify.error(t("errorOccurred"));
     }
   };
 
@@ -1211,7 +1221,7 @@ export default function ProviderDetailPage() {
                 ...prev,
                 phase: "error",
                 status: t("failedFetchModels"),
-                error: syncData.error?.message || syncData.error || t("failedImportModels"),
+                error: getApiErrorMessage(syncData, t("failedImportModels")),
               }));
               return null;
             }
@@ -1250,8 +1260,7 @@ export default function ProviderDetailPage() {
         return null;
       }
       const data = await res.json().catch(() => ({}));
-      const errorMsg = data.error?.message || data.error || t("failedSaveConnection");
-      return errorMsg;
+      return getApiErrorMessage(data, t("failedSaveConnection"));
     } catch (error) {
       console.log("Error saving connection:", error);
       return t("failedSaveConnectionRetry");
@@ -1271,7 +1280,7 @@ export default function ProviderDetailPage() {
         return null;
       }
       const data = await res.json().catch(() => ({}));
-      return data.error?.message || data.error || t("failedSaveConnection");
+      return getApiErrorMessage(data, t("failedSaveConnection"));
     } catch (error) {
       console.log("Error updating connection:", error);
       return t("failedSaveConnectionRetry");
@@ -1343,7 +1352,7 @@ export default function ProviderDetailPage() {
 
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        notify.error(data.error || "Failed to update Codex limit policy");
+        notify.error(getApiErrorMessage(data, "Failed to update Codex limit policy"));
         return;
       }
 
@@ -1374,7 +1383,7 @@ export default function ProviderDetailPage() {
       const res = await fetch(`/api/providers/${connectionId}/test`, { method: "POST" });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        alert(data.error || t("failedRetestConnection"));
+        alert(getApiErrorMessage(data, t("failedRetestConnection")));
         return;
       }
       await fetchConnections();
@@ -1476,7 +1485,7 @@ export default function ProviderDetailPage() {
         notify.success(t("tokenRefreshed"));
         await fetchConnections();
       } else {
-        notify.error(data.error || t("tokenRefreshFailed"));
+        notify.error(getApiErrorMessage(data, t("tokenRefreshFailed")));
       }
     } catch (error) {
       console.error("Error refreshing token:", error);
@@ -1624,7 +1633,7 @@ export default function ProviderDetailPage() {
           ...prev,
           phase: "error",
           status: t("failedFetchModels"),
-          error: data.error || t("failedImportModels"),
+          error: getApiErrorMessage(data, t("failedImportModels")),
         }));
         return;
       }
@@ -1847,13 +1856,17 @@ export default function ProviderDetailPage() {
     setTogglingAutoSync(true);
     try {
       const newValue = !isAutoSyncEnabled;
-      await fetch(`/api/providers/${(autoSyncConnection as any).id}`, {
+      const res = await fetch(`/api/providers/${(autoSyncConnection as any).id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           providerSpecificData: { autoSync: newValue },
         }),
       });
+      if (!res.ok) {
+        notify.error(t("autoSyncToggleFailed"));
+        return;
+      }
       await fetchConnections();
       notify[newValue ? "success" : "info"](
         newValue ? t("autoSyncEnabled") : t("autoSyncDisabled")
@@ -2021,8 +2034,11 @@ export default function ProviderDetailPage() {
         }
       );
       if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        notify.error(detail || t("failedSaveCustomModel"));
+        // The body is JSON ({ error: { message } }); showing res.text() put raw JSON in the toast.
+        const detail = await formatProviderModelsErrorResponse(res);
+        notify.error(
+          detail ? `${t("failedSaveCustomModel")} — ${detail}` : t("failedSaveCustomModel")
+        );
         return;
       }
       // Optimistic update: refresh model meta
@@ -2048,8 +2064,11 @@ export default function ProviderDetailPage() {
         body: JSON.stringify({ isHidden: hidden, modelIds }),
       });
       if (!res.ok) {
-        const detail = await res.text().catch(() => "");
-        notify.error(detail || t("failedSaveCustomModel"));
+        // The body is JSON ({ error: { message } }); showing res.text() put raw JSON in the toast.
+        const detail = await formatProviderModelsErrorResponse(res);
+        notify.error(
+          detail ? `${t("failedSaveCustomModel")} — ${detail}` : t("failedSaveCustomModel")
+        );
         return;
       }
       await fetchProviderModelMeta().catch(() => {});
@@ -2453,9 +2472,13 @@ export default function ProviderDetailPage() {
                     });
                     if (res.ok) {
                       router.push("/dashboard/providers");
+                    } else {
+                      const data = await res.json().catch(() => null);
+                      notify.error(getApiErrorMessage(data, t("errorOccurred")));
                     }
                   } catch (error) {
                     console.log("Error deleting provider node:", error);
+                    notify.error(t("errorOccurred"));
                   }
                 }}
               >
@@ -2769,10 +2792,17 @@ export default function ProviderDetailPage() {
       {/* Search provider info */}
       {isSearchProvider && (
         <Card>
-          <h2 className="text-lg font-semibold mb-4">{t("searchProvider") || "Search Provider"}</h2>
+          {/* providerText falls back to English when the key is missing; a bare t() would
+              print the raw key ("providers.searchProvider"), which is never falsy. */}
+          <h2 className="text-lg font-semibold mb-4">
+            {providerText(t, "searchProvider", "Search Provider")}
+          </h2>
           <p className="text-sm text-text-muted">
-            {t("searchProviderDesc") ||
-              "This provider is used for web search via POST /v1/search. No model configuration needed — search providers are ready to use once an API key is connected."}
+            {providerText(
+              t,
+              "searchProviderDesc",
+              "This provider is used for web search via POST /v1/search. No model configuration needed — search providers are ready to use once an API key is connected."
+            )}
           </p>
           {providerId === "perplexity-search" && (
             <div className="mt-3 flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-500/10 border border-blue-500/20">
@@ -3567,9 +3597,15 @@ function CustomModelsSection({
         setNewEndpoints(["chat"]);
         await fetchCustomModels();
         onModelsChanged?.();
+      } else {
+        const detail = await formatProviderModelsErrorResponse(res);
+        notify.error(
+          detail ? `${t("failedSaveCustomModel")} — ${detail}` : t("failedSaveCustomModel")
+        );
       }
     } catch (e) {
       console.error("Failed to add custom model:", e);
+      notify.error(t("failedSaveCustomModel"));
     } finally {
       setAdding(false);
     }
@@ -3577,16 +3613,21 @@ function CustomModelsSection({
 
   const handleRemove = async (modelId) => {
     try {
-      await fetch(
+      const res = await fetch(
         `/api/provider-models?provider=${encodeURIComponent(providerId)}&model=${encodeURIComponent(modelId)}`,
         {
           method: "DELETE",
         }
       );
+      if (!res.ok) {
+        notify.error(t("failedRemoveModelFromDatabase"));
+        return;
+      }
       await fetchCustomModels();
       onModelsChanged?.();
     } catch (e) {
       console.error("Failed to remove custom model:", e);
+      notify.error(t("failedRemoveModelFromDatabase"));
     }
   };
 
@@ -4079,13 +4120,10 @@ function CompatibleModelsSection({
       });
 
       if (!customModelRes.ok) {
-        let errorData: { error?: { message?: string } } = {};
-        try {
-          errorData = await customModelRes.json();
-        } catch (jsonError) {
-          console.error("Failed to parse error response from custom model API:", jsonError);
-        }
-        throw new Error(errorData.error?.message || t("failedSaveCustomModel"));
+        const detail = await formatProviderModelsErrorResponse(customModelRes);
+        throw new Error(
+          detail ? `${t("failedSaveCustomModel")} — ${detail}` : t("failedSaveCustomModel")
+        );
       }
 
       // Only create alias after customModel is saved successfully
@@ -4114,7 +4152,7 @@ function CompatibleModelsSection({
         async () => {
           const res = await fetch(`/api/providers/${activeConnection.id}/models`);
           const data = await res.json();
-          if (!res.ok) throw new Error(data.error || t("failedImportModels"));
+          if (!res.ok) throw new Error(getApiErrorMessage(data, t("failedImportModels")));
           return data;
         },
         // processModel callback
@@ -4349,10 +4387,13 @@ CooldownTimer.propTypes = {
   until: PropTypes.string.isRequired,
 };
 
-const ERROR_TYPE_LABELS = {
+// `labelKey` is a message key in the "providers" namespace. Three entries have no message
+// yet and carry a literal `label` instead — passing that text to t() rendered the raw key
+// path ("providers.403 Banned") on the badge.
+const ERROR_TYPE_LABELS: Record<string, { labelKey?: string; label?: string; variant: string }> = {
   runtime_error: { labelKey: "errorTypeRuntime", variant: "warning" },
   upstream_auth_error: { labelKey: "errorTypeUpstreamAuth", variant: "error" },
-  account_deactivated: { labelKey: "Account Deactivated", variant: "error" },
+  account_deactivated: { label: "Account Deactivated", variant: "error" },
   auth_missing: { labelKey: "errorTypeMissingCredential", variant: "warning" },
   token_refresh_failed: { labelKey: "errorTypeRefreshFailed", variant: "warning" },
   token_expired: { labelKey: "errorTypeTokenExpired", variant: "warning" },
@@ -4361,9 +4402,16 @@ const ERROR_TYPE_LABELS = {
   network_error: { labelKey: "errorTypeNetworkError", variant: "warning" },
   unsupported: { labelKey: "errorTypeTestUnsupported", variant: "default" },
   upstream_error: { labelKey: "errorTypeUpstreamError", variant: "error" },
-  banned: { labelKey: "403 Banned", variant: "error" },
-  credits_exhausted: { labelKey: "No Credits", variant: "warning" },
+  banned: { label: "403 Banned", variant: "error" },
+  credits_exhausted: { label: "No Credits", variant: "warning" },
 };
+
+function getErrorBadgeLabel(
+  badge: { labelKey?: string; label?: string },
+  t: (key: string) => string
+): string {
+  return badge.label ?? (badge.labelKey ? t(badge.labelKey) : "");
+}
 
 function inferErrorType(connection, isCooldown) {
   if (isCooldown) return "upstream_rate_limited";
@@ -4694,8 +4742,8 @@ function ConnectionRow({
               <CooldownTimer until={connection.rateLimitedUntil} />
             )}
             {statusPresentation.errorBadge && connection.isActive !== false && (
-              <Badge variant={statusPresentation.errorBadge.variant} size="sm">
-                {t(statusPresentation.errorBadge.labelKey)}
+              <Badge variant={statusPresentation.errorBadge.variant as any} size="sm">
+                {getErrorBadgeLabel(statusPresentation.errorBadge, t)}
               </Badge>
             )}
             {connection.lastError && connection.isActive !== false && (
@@ -4946,7 +4994,7 @@ function AddApiKeyModal({
   const isGlm = provider === "glm";
   const isQoder = provider === "qoder";
 
-  const [formData, setFormData] = useState({
+  const getInitialFormData = () => ({
     name: "",
     apiKey: "",
     priority: 1,
@@ -4956,6 +5004,7 @@ function AddApiKeyModal({
     validationModelId: "",
     customUserAgent: "",
   });
+  const [formData, setFormData] = useState(getInitialFormData);
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -5035,6 +5084,11 @@ function AddApiKeyModal({
       if (formData.customUserAgent.trim()) {
         providerSpecificData.customUserAgent = formData.customUserAgent.trim();
       }
+      // Keep the model that validated this key, so later connection tests (Retest,
+      // Test all) use it too — the edit modal already stores it the same way.
+      if (formData.validationModelId.trim()) {
+        providerSpecificData.validationModelId = formData.validationModelId.trim();
+      }
       if (isBailian) {
         providerSpecificData.baseUrl = validatedBailianBaseUrl;
       } else if (isVertex) {
@@ -5055,6 +5109,12 @@ function AddApiKeyModal({
       const error = await onSave(payload);
       if (error) {
         setSaveError(typeof error === "string" ? error : t("failedSaveConnection"));
+      } else {
+        // The modal stays mounted while closed: clear it, or the next "Add" opens with the
+        // previous name and API key still filled in.
+        setFormData(getInitialFormData());
+        setValidationResult(null);
+        setShowAdvanced(false);
       }
     } finally {
       setSaving(false);
@@ -5085,7 +5145,7 @@ function AddApiKeyModal({
             className="flex-1"
             placeholder={
               isVertex
-                ? "Cole o Service Account JSON aqui"
+                ? "Paste the Service Account JSON here"
                 : isQoder
                   ? "Paste your Qoder Personal Access Token"
                   : undefined
@@ -5159,11 +5219,11 @@ function AddApiKeyModal({
           </div>
         )}
         <Input
-          label="Model ID (opcional)"
-          placeholder="ex: grok-3 ou meta-llama/Llama-3.1-8B-Instruct"
+          label="Model ID (optional)"
+          placeholder="e.g. grok-3 or meta-llama/Llama-3.1-8B-Instruct"
           value={formData.validationModelId}
           onChange={(e) => setFormData({ ...formData, validationModelId: e.target.value })}
-          hint="Usado como fallback se a listagem de models não estiver disponível"
+          hint="Used as a fallback when the provider does not offer a model list"
         />
         <Input
           label={t("priorityLabel")}
@@ -5184,11 +5244,11 @@ function AddApiKeyModal({
         )}
         {isVertex && (
           <Input
-            label="Região (Region)"
+            label="Region"
             value={formData.region}
             onChange={(e) => setFormData({ ...formData, region: e.target.value })}
             placeholder={defaultRegion}
-            hint="ex: us-central1 ou europe-west4. Partner models usam a região global automaticamente."
+            hint="e.g. us-central1 or europe-west4. Partner models use the global region automatically."
           />
         )}
         {isGlm && (
@@ -5423,16 +5483,22 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
           updates.rateLimitedUntil = null;
         }
       }
+      // The API merges providerSpecificData into what is stored, so a key that is left out
+      // keeps its old value. To clear a field that was set before, send it as "".
+      const trimmedTag = formData.tag.trim();
+      const tagPatch =
+        trimmedTag || connection.providerSpecificData?.tag ? { tag: trimmedTag } : {};
       // Persist extra API keys and baseUrl in providerSpecificData
       if (!isOAuth) {
         updates.providerSpecificData = {
           ...(connection.providerSpecificData || {}),
           extraApiKeys: extraApiKeys.filter((k) => k.trim().length > 0),
-          tag: formData.tag.trim() || undefined,
+          ...tagPatch,
           customUserAgent: formData.customUserAgent.trim(),
         };
-        if (formData.validationModelId) {
-          updates.providerSpecificData.validationModelId = formData.validationModelId;
+        const trimmedValidationModelId = formData.validationModelId.trim();
+        if (trimmedValidationModelId || connection.providerSpecificData?.validationModelId) {
+          updates.providerSpecificData.validationModelId = trimmedValidationModelId;
         }
         // Update baseUrl for bailian-coding-plan
         if (isBailian) {
@@ -5446,7 +5512,7 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
         // Also persist tag for OAuth accounts
         updates.providerSpecificData = {
           ...(connection.providerSpecificData || {}),
-          tag: formData.tag.trim() || undefined,
+          ...tagPatch,
         };
       }
       const error = (await onSave(updates)) as void | unknown;
@@ -5535,7 +5601,7 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
                 type="password"
                 value={formData.apiKey}
                 onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-                placeholder={isVertex ? "Cole o Service Account JSON aqui" : t("enterNewApiKey")}
+                placeholder={isVertex ? "Paste the Service Account JSON here" : t("enterNewApiKey")}
                 hint={t("leaveBlankKeepCurrentApiKey")}
                 className="flex-1"
               />
@@ -5589,11 +5655,11 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
               </div>
             )}
             <Input
-              label="Model ID (opcional)"
-              placeholder="ex: grok-3 ou meta-llama/Llama-3.1-8B-Instruct"
+              label="Model ID (optional)"
+              placeholder="e.g. grok-3 or meta-llama/Llama-3.1-8B-Instruct"
               value={formData.validationModelId}
               onChange={(e) => setFormData({ ...formData, validationModelId: e.target.value })}
-              hint="Usado como fallback se a listagem de models não estiver disponível"
+              hint="Used as a fallback when the provider does not offer a model list"
             />
           </>
         )}
@@ -5610,11 +5676,11 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
 
         {isVertex && (
           <Input
-            label="Região (Region)"
+            label="Region"
             value={formData.region}
             onChange={(e) => setFormData({ ...formData, region: e.target.value })}
             placeholder={defaultRegion}
-            hint="ex: us-central1 ou europe-west4. Partner models usam a região global automaticamente."
+            hint="e.g. us-central1 or europe-west4. Partner models use the global region automatically."
           />
         )}
 
@@ -5709,10 +5775,20 @@ function EditConnectionModal({ isOpen, connection, onSave, onClose }: EditConnec
                   {testResult.valid ? t("valid") : t("failed")}
                 </Badge>
                 {testErrorMeta && (
-                  <Badge variant={testErrorMeta.variant}>{t(testErrorMeta.labelKey)}</Badge>
+                  <Badge variant={testErrorMeta.variant as any}>
+                    {getErrorBadgeLabel(testErrorMeta, t)}
+                  </Badge>
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {/* API-key connections show the save error next to the key field above; OAuth
+            accounts have no such block, so without this a failed save looked like a no-op. */}
+        {isOAuth && saveError && (
+          <div className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+            {saveError}
           </div>
         )}
 
@@ -5761,10 +5837,15 @@ function EditCompatibleNodeModal({
     modelsPath: "",
   });
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [checkKey, setCheckKey] = useState("");
   const [validating, setValidating] = useState(false);
   const [validationResult, setValidationResult] = useState(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) setSaveError(null);
+  }, [isOpen]);
 
   useEffect(() => {
     if (node) {
@@ -5800,6 +5881,7 @@ function EditCompatibleNodeModal({
   const handleSubmit = async () => {
     if (!formData.name.trim() || !formData.prefix.trim() || !formData.baseUrl.trim()) return;
     setSaving(true);
+    setSaveError(null);
     try {
       const payload: any = {
         name: formData.name,
@@ -5811,7 +5893,8 @@ function EditCompatibleNodeModal({
       if (!isAnthropic) {
         payload.apiType = formData.apiType;
       }
-      await onSave(payload);
+      const error = await onSave(payload);
+      if (typeof error === "string" && error) setSaveError(error);
     } finally {
       setSaving(false);
     }
@@ -5974,6 +6057,14 @@ function EditCompatibleNodeModal({
           <Badge variant={validationResult === "success" ? "success" : "error"}>
             {validationResult === "success" ? t("valid") : t("invalid")}
           </Badge>
+        )}
+        {saveError && (
+          <div
+            role="alert"
+            className="text-sm text-red-500 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2"
+          >
+            {saveError}
+          </div>
         )}
         <div className="flex gap-2">
           <Button

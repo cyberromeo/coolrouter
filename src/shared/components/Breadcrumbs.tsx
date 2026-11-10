@@ -1,20 +1,18 @@
 "use client";
 
 /**
- * Breadcrumbs — FASE-07 UX
+ * Breadcrumbs — trail for pages nested below a top-level section.
  *
- * Dashboard breadcrumb navigation component. Automatically generates
- * breadcrumbs from the current path with friendly labels.
+ * Top-level pages (/dashboard/providers, /dashboard/logs, …) already show their name
+ * in the header, and provider detail pages get their own trail there, so this renders
+ * only for the remaining nested pages (e.g. Providers › New).
  * Uses usePathname() internally — no props needed.
- *
- * Usage:
- *   <Breadcrumbs />
  */
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
 
-const PATH_LABELS = {
+const PATH_LABELS: Record<string, string> = {
   dashboard: "Dashboard",
   providers: "Providers",
   combos: "Combos",
@@ -23,73 +21,51 @@ const PATH_LABELS = {
   "api-manager": "API Keys",
   analytics: "Usage",
   playground: "Playground",
+  new: "New",
   add: "Add",
   edit: "Edit",
   keys: "API Keys",
   models: "Models",
 };
 
-/**
- * Get a friendly label for a path segment.
- * @param {string} segment
- * @returns {string}
- */
-function getLabel(segment) {
-  return PATH_LABELS[segment] || segment.charAt(0).toUpperCase() + segment.slice(1);
-}
-
 export default function Breadcrumbs() {
   const pathname = usePathname();
-  if (!pathname || pathname === "/dashboard") return null;
+  if (!pathname) return null;
 
+  // Drop the "dashboard" root: every page lives under it, so it says nothing.
   const segments = pathname.split("/").filter(Boolean);
-  const crumbs = segments.map((seg, idx) => ({
-    label: getLabel(seg),
-    href: "/" + segments.slice(0, idx + 1).join("/"),
-    isLast: idx === segments.length - 1,
+  const trail = segments[0] === "dashboard" ? segments.slice(1) : segments;
+  if (trail.length < 2) return null;
+  // Ids (provider connections, UUIDs) are not labels; the header names those pages.
+  if (trail.some((segment) => !PATH_LABELS[segment])) return null;
+
+  const base = segments[0] === "dashboard" ? "/dashboard" : "";
+  const crumbs = trail.map((segment, index) => ({
+    label: PATH_LABELS[segment],
+    href: `${base}/${trail.slice(0, index + 1).join("/")}`,
+    isLast: index === trail.length - 1,
   }));
 
   return (
-    <nav
-      aria-label="Breadcrumb"
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "6px",
-        fontSize: "13px",
-        color: "var(--text-secondary, #888)",
-        padding: "8px 0",
-        marginBottom: "8px",
-      }}
-    >
-      {crumbs.map((crumb, i) => (
-        <span key={crumb.href} style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-          {i > 0 && (
-            <span style={{ opacity: 0.4, fontSize: "11px" }} aria-hidden="true">
-              ›
+    <nav aria-label="Breadcrumb" className="mb-4 flex items-center gap-1.5 text-[13px]">
+      {crumbs.map((crumb, index) => (
+        <span key={crumb.href} className="flex items-center gap-1.5">
+          {index > 0 && (
+            <span
+              className="material-symbols-outlined text-[14px] text-text-muted/60"
+              aria-hidden="true"
+            >
+              chevron_right
             </span>
           )}
           {crumb.isLast ? (
-            <span
-              aria-current="page"
-              style={{ color: "var(--text-primary, #e0e0e0)", fontWeight: 500 }}
-            >
+            <span aria-current="page" className="font-medium text-text-main">
               {crumb.label}
             </span>
           ) : (
             <Link
               href={crumb.href}
-              style={{
-                color: "var(--text-secondary, #888)",
-                textDecoration: "none",
-                transition: "color 0.15s",
-              }}
-              onMouseEnter={(e) =>
-                ((e.currentTarget as HTMLElement).style.color = "var(--accent, #818cf8)")
-              }
-              onMouseLeave={(e) =>
-                ((e.currentTarget as HTMLElement).style.color = "var(--text-secondary, #888)")
-              }
+              className="rounded text-text-muted transition-colors hover:text-text-main"
             >
               {crumb.label}
             </Link>

@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Cool Router</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #000000;
+        --surface: #0a0a0a;
+        --border: #262626;
+        --text: #ededed;
+        --muted: #a1a1a1;
+        --error: #ff6166;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+      }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          14px/1.5 -apple-system,
+          BlinkMacSystemFont,
+          "Segoe UI",
+          system-ui,
+          sans-serif;
+        -webkit-font-smoothing: antialiased;
+        user-select: none;
+      }
+      /* macOS hides the title bar; keep the top strip draggable. */
+      .drag {
+        position: fixed;
+        inset: 0 0 auto 0;
+        height: 32px;
+        -webkit-app-region: drag;
+      }
+      main {
+        width: min(440px, calc(100vw - 48px));
+        text-align: center;
+      }
+      .logo {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 44px;
+        height: 44px;
+        border-radius: 10px;
+        background: var(--text);
+        color: var(--bg);
+        margin-bottom: 20px;
+      }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.01em;
+      }
+      p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .progress {
+        position: relative;
+        width: 160px;
+        height: 2px;
+        margin: 24px auto 0;
+        overflow: hidden;
+        border-radius: 2px;
+        background: var(--border);
+      }
+      .progress::after {
+        content: "";
+        position: absolute;
+        inset: 0 auto 0 0;
+        width: 40%;
+        border-radius: 2px;
+        background: var(--text);
+        animation: slide 1.4s ease-in-out infinite;
+      }
+      @keyframes slide {
+        0% {
+          transform: translateX(-100%);
+        }
+        100% {
+          transform: translateX(250%);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .progress::after {
+          animation: none;
+          width: 100%;
+          opacity: 0.5;
+        }
+      }
+      .error-title {
+        color: var(--text);
+      }
+      .detail {
+        margin-top: 10px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        user-select: text;
+      }
+      .actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 24px;
+      }
+      button {
+        height: 34px;
+        padding: 0 14px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: transparent;
+        color: var(--text);
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+      }
+      button:hover {
+        background: rgba(255, 255, 255, 0.06);
+      }
+      button:focus-visible {
+        outline: 2px solid #3291ff;
+        outline-offset: 2px;
+      }
+      button.primary {
+        border-color: var(--text);
+        background: var(--text);
+        color: var(--bg);
+      }
+      button.primary:hover {
+        background: #ffffff;
+      }
+      button:disabled {
+        opacity: 0.5;
+        cursor: default;
+      }
+      pre {
+        display: none;
+        max-height: 160px;
+        margin: 20px 0 0;
+        padding: 10px 12px;
+        overflow: auto;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+        color: var(--muted);
+        font:
+          11px/1.5 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        text-align: left;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        user-select: text;
+      }
+      .version {
+        margin-top: 28px;
+        font-size: 12px;
+        color: #666666;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="drag"></div>
+    <main>
+      <div class="logo" aria-hidden="true">
+        <svg width="24" height="24" viewBox="0 0 586 586" xmlns="http://www.w3.org/2000/svg">
+          <g fill="currentColor" transform="translate(0 586) scale(0.1 -0.1)">
+            <path
+              d="M2715 5037 c-115 -194 -303 -509 -418 -700 -115 -191 -207 -352 -205 -356 2 -5 194 -159 428 -342 234 -184 466 -373 516 -421 50 -49 94 -88 97 -88 4 0 7 431 7 957 l0 956 -102 174 c-57 95 -105 173 -108 173 -3 -1 -99 -159 -215 -353z M3280 3501 c0 -710 4 -1291 8 -1291 5 0 19 12 33 26 57 62 205 158 633 414 251 150 454 275 452 279 -3 5 -503 842 -938 1568 -93 155 -173 285 -178 288 -7 4 -10 -465 -10 -1284z M1613 3192 c-111 -186 -205 -344 -208 -353 -6 -16 -13 -12 570 -352 365 -213 450 -267 541 -344 28 -24 54 -43 58 -43 4 0 6 172 4 383 l-3 382 -26 56 c-27 58 -91 115 -377 337 -54 42 -156 121 -225 175 -69 53 -127 97 -129 97 -2 0 -94 -152 -205 -338z M4464 2352 c-109 -66 -296 -176 -414 -247 -118 -70 -242 -146 -275 -168 -175 -117 -294 -276 -344 -457 -33 -118 -42 -269 -39 -645 l3 -350 1233 -3 c696 -1 1232 2 1232 7 0 4 -31 60 -68 122 -38 63 -156 260 -262 439 -106 179 -293 492 -414 695 -122 204 -268 450 -326 547 -58 98 -110 178 -116 178 -6 0 -101 -53 -210 -118z M1109 2358 c-13 -25 -285 -485 -404 -683 -40 -66 -206 -345 -370 -620 -164 -275 -306 -514 -316 -531 -11 -17 -19 -34 -19 -38 0 -3 556 -6 1236 -6 l1236 0 -5 393 c-4 422 -7 446 -63 580 -79 187 -203 306 -507 481 -78 46 -278 162 -444 259 -166 98 -308 180 -316 183 -10 3 -20 -3 -28 -18z"
+            />
+          </g>
+        </svg>
+      </div>
+
+      <section id="loading" role="status" aria-live="polite">
+        <h1 id="loading-title">Starting Cool Router</h1>
+        <p id="loading-hint">Bringing your router online…</p>
+        <div class="progress" aria-hidden="true"></div>
+      </section>
+
+      <section id="error" hidden role="alert">
+        <h1 class="error-title">Cool Router couldn't start</h1>
+        <p class="detail" id="error-detail"></p>
+        <div class="actions">
+          <button class="primary" id="retry" type="button">Try again</button>
+          <button id="logs" type="button">Open logs</button>
+          <button id="quit" type="button">Quit</button>
+        </div>
+        <pre id="log-tail" tabindex="0" aria-label="Recent log lines"></pre>
+      </section>
+
+      <div class="version" id="version"></div>
+    </main>
+
+    <script>
+      (function () {
+        var api = window.electronAPI || {};
+        var loading = document.getElementById("loading");
+        var loadingHint = document.getElementById("loading-hint");
+        var loadingTitle = document.getElementById("loading-title");
+        var errorBox = document.getElementById("error");
+        var errorDetail = document.getElementById("error-detail");
+        var logTail = document.getElementById("log-tail");
+        var retry = document.getElementById("retry");
+        var slowTimer = null;
+
+        function render(state) {
+          if (!state) return;
+          if (state.version) {
+            document.getElementById("version").textContent = "Version " + state.version;
+          }
+          var failed = state.status === "error" || state.status === "stopped";
+          loading.hidden = failed;
+          errorBox.hidden = !failed;
+          retry.disabled = false;
+
+          if (failed) {
+            clearTimeout(slowTimer);
+            errorDetail.textContent = state.error || "The server did not start.";
+            var lines = Array.isArray(state.logTail) ? state.logTail : [];
+            logTail.textContent = lines.join("\n");
+            logTail.style.display = lines.length ? "block" : "none";
+            logTail.scrollTop = logTail.scrollHeight;
+            return;
+          }
+
+          loadingTitle.textContent =
+            state.status === "restarting" ? "Restarting Cool Router" : "Starting Cool Router";
+          loadingHint.textContent = "Bringing your router online…";
+          clearTimeout(slowTimer);
+          slowTimer = setTimeout(function () {
+            loadingHint.textContent =
+              "Still working — the first launch sets up the database and can take a minute.";
+          }, 12000);
+        }
+
+        function refresh() {
+          if (typeof api.getServerState !== "function") return;
+          api.getServerState().then(render, function () {});
+        }
+
+        retry.addEventListener("click", function () {
+          retry.disabled = true;
+          render({ status: "restarting" });
+          if (typeof api.restartServer === "function") {
+            api.restartServer().then(refresh, refresh);
+          }
+        });
+        document.getElementById("logs").addEventListener("click", function () {
+          if (typeof api.openLogs === "function") api.openLogs();
+        });
+        document.getElementById("quit").addEventListener("click", function () {
+          if (typeof api.quitApp === "function") api.quitApp();
+        });
+
+        if (typeof api.onServerStatus === "function") {
+          // Status pushes don't carry the log tail; pull the full state on every change.
+          api.onServerStatus(refresh);
+        }
+        render({ status: "starting" });
+        refresh();
+      })();
+    </script>
+  </body>
+</html>

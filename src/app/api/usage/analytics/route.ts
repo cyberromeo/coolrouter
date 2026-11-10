@@ -86,6 +86,8 @@ export async function GET(request) {
                AND requested_model != ''
                AND model IS NOT NULL
                AND requested_model != model
+               -- "openai/gpt-4o" served by "gpt-4o" is the same model, not a fallback
+               AND requested_model NOT LIKE '%/' || model
               THEN 1 ELSE 0 END
             ) as fallbacks
           FROM call_logs
@@ -93,8 +95,7 @@ export async function GET(request) {
         `
         )
         .get(sinceIso ? { since: sinceIso } : {}) as
-        | { total?: number; with_requested?: number; fallbacks?: number }
-        | undefined;
+        { total?: number; with_requested?: number; fallbacks?: number } | undefined;
 
       const total = Number(row?.total || 0);
       const withRequested = Number(row?.with_requested || 0);

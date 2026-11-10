@@ -5,6 +5,7 @@ import PropTypes from "prop-types";
 import Modal from "./Modal";
 import Button from "./Button";
 import Input from "./Input";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 
 /**
  * Cursor Auth Modal
@@ -36,7 +37,7 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
           setMachineId(data.machineId);
           setAutoDetected(true);
         } else {
-          setError(data.error || "Could not auto-detect tokens");
+          setError(getApiErrorMessage(data, "Could not auto-detect tokens"));
         }
       } catch (err) {
         setError("Failed to auto-detect tokens");
@@ -72,10 +73,10 @@ export default function CursorAuthModal({ isOpen, onSuccess, onClose }) {
         }),
       });
 
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
-        throw new Error(data.error || "Import failed");
+        throw new Error(getApiErrorMessage(data, "Import failed"));
       }
 
       // Success - close modal and trigger refresh

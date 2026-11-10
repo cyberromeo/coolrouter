@@ -1,6 +1,14 @@
 import { CORS_ORIGIN } from "@/shared/utils/cors";
 import { buildClientRawRequest, handleChat } from "@/sse/handlers/chat";
 import { initTranslators } from "@coolrouter/open-sse/translator/index.ts";
+import {
+  estimateGeminiTokens,
+  extractGeminiApiKey,
+  geminiErrorResponse,
+  geminiToOpenAIChatRequest,
+  parseGeminiModelPath,
+  transformToGemini,
+} from "@coolrouter/open-sse/utils/geminiTransform.ts";
 import { v1betaGeminiGenerateSchema } from "@/shared/validation/schemas";
 import { isValidationFailure, validateBody } from "@/shared/validation/helpers";
 
@@ -17,6 +25,10 @@ async function ensureInitialized() {
   }
 }
 
+function corsHeaders() {
+  return new Headers({ "Access-Control-Allow-Origin": CORS_ORIGIN });
+}
+
 /**
  * Handle CORS preflight
  */
@@ -31,8 +43,39 @@ export async function OPTIONS() {
 }
 
 /**
- * POST /v1beta/models/{model}:generateContent - Gemini compatible endpoint
- * Converts Gemini format to internal format and handles via handleChat
+ * Request handed to the shared chat handler: the converted OpenAI body, plus the client's
+ * API key moved to where the handler looks for it. Gemini clients send the key as
+ * `x-goog-api-key` or `?key=`; the handler reads `Authorization: Bearer`. The key is taken
+ * off the URL and out of the Gemini header so it is not written to request logs.
+ */
+function buildForwardRequest(request: Request, body: unknown, stream: boolean) {
+  const url = new URL(request.url);
+  const headers = new Headers(request.headers);
+  const geminiKey = extractGeminiApiKey(request);
+  if (geminiKey && !headers.get("authorization")) {
+    headers.set("authorization", `Bearer ${geminiKey}`);
+  }
+  headers.delete("x-goog-api-key");
+  headers.delete("content-length");
+  url.searchParams.delete("key");
+  // The URL already decided the mode; keep the Accept header from overriding it.
+  headers.set("accept", stream ? "text/event-stream" : "application/json");
+
+  return new Request(url.toString(), {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
+}
+
+/**
+ * POST /v1beta/models/{model}:generateContent
+ * POST /v1beta/models/{model}:streamGenerateContent[?alt=sse]
+ * POST /v1beta/models/{model}:countTokens
+ *
+ * Gemini (Google Generative Language API) compatible endpoint. The request is converted to
+ * the internal OpenAI chat format, handled via handleChat, and the answer is converted back
+ * to Gemini's wire format — a GenerateContentResponse object, or a stream of them.
  */
 export async function POST(request, { params }) {
   await ensureInitialized();
@@ -41,91 +84,62 @@ export async function POST(request, { params }) {
   try {
     rawBody = await request.json();
   } catch {
-    return Response.json(
-      {
-        error: {
-          message: "Invalid request",
-          details: [{ field: "body", message: "Invalid JSON body" }],
-        },
-      },
-      { status: 400 }
-    );
+    return geminiErrorResponse(400, "Invalid JSON payload received.", corsHeaders());
   }
 
   try {
     const { path } = await params;
     // path = ["provider", "model:generateContent"] or ["model:generateContent"]
+    const { model, action } = parseGeminiModelPath(path);
 
-    let model;
-    if (path.length >= 2) {
-      // Format: /v1beta/models/provider/model:generateContent
-      const provider = path[0];
-      const modelAction = path[1];
-      const modelName = modelAction
-        .replace(":generateContent", "")
-        .replace(":streamGenerateContent", "");
-      model = `${provider}/${modelName}`;
-    } else {
-      // Format: /v1beta/models/model:generateContent
-      const modelAction = path[0];
-      model = modelAction.replace(":generateContent", "").replace(":streamGenerateContent", "");
+    if (!model) {
+      return geminiErrorResponse(400, "Model name is required.", corsHeaders());
+    }
+
+    if (action === "countTokens") {
+      return Response.json(
+        { totalTokens: estimateGeminiTokens(rawBody) },
+        { headers: corsHeaders() }
+      );
+    }
+
+    if (action !== "generateContent" && action !== "streamGenerateContent") {
+      return geminiErrorResponse(
+        404,
+        `models/${model} does not support the method "${action}". ` +
+          "Supported methods: generateContent, streamGenerateContent, countTokens.",
+        corsHeaders()
+      );
     }
 
     const validation = validateBody(v1betaGeminiGenerateSchema, rawBody);
     if (isValidationFailure(validation)) {
-      return Response.json({ error: validation.error }, { status: 400 });
+      const details = validation.error.details
+        .map((detail) => (detail.field ? `${detail.field}: ${detail.message}` : detail.message))
+        .join("; ");
+      return geminiErrorResponse(
+        400,
+        details ? `${validation.error.message}: ${details}` : validation.error.message,
+        corsHeaders()
+      );
     }
     const body = validation.data;
 
+    // The URL decides the mode: :streamGenerateContent streams, :generateContent does not.
+    const stream = action === "streamGenerateContent";
+    const sse = new URL(request.url).searchParams.get("alt") === "sse";
+
     // Convert Gemini format to OpenAI/internal format
-    const convertedBody = convertGeminiToInternal(body, model);
+    const convertedBody = geminiToOpenAIChatRequest(body, model, stream);
+    const forwardRequest = buildForwardRequest(request, convertedBody, stream);
 
-    // Create new request with converted body
-    const newRequest = new Request(request.url, {
-      method: "POST",
-      headers: request.headers,
-      body: JSON.stringify(convertedBody),
-    });
-
-    return await handleChat(newRequest, buildClientRawRequest(request, rawBody));
+    const response = await handleChat(
+      forwardRequest,
+      buildClientRawRequest(forwardRequest, rawBody)
+    );
+    return await transformToGemini(response, { model, stream, sse });
   } catch (error) {
     console.log("Error handling Gemini request:", error);
-    return Response.json({ error: { message: error.message, code: 500 } }, { status: 500 });
+    return geminiErrorResponse(500, error?.message || "Internal error", corsHeaders());
   }
-}
-
-/**
- * Convert Gemini request format to internal format
- */
-function convertGeminiToInternal(geminiBody, model) {
-  const messages = [];
-
-  // Convert system instruction
-  if (geminiBody.systemInstruction) {
-    const systemText = geminiBody.systemInstruction.parts?.map((p) => p.text).join("\n") || "";
-    if (systemText) {
-      messages.push({ role: "system", content: systemText });
-    }
-  }
-
-  // Convert contents to messages
-  if (geminiBody.contents) {
-    for (const content of geminiBody.contents) {
-      const role = content.role === "model" ? "assistant" : "user";
-      const text = content.parts?.map((p) => p.text).join("\n") || "";
-      messages.push({ role, content: text });
-    }
-  }
-
-  // Determine if streaming
-  const stream = geminiBody.generationConfig?.stream !== false;
-
-  return {
-    model,
-    messages,
-    stream,
-    max_tokens: geminiBody.generationConfig?.maxOutputTokens,
-    temperature: geminiBody.generationConfig?.temperature,
-    top_p: geminiBody.generationConfig?.topP,
-  };
 }

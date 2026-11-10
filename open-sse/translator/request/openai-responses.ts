@@ -79,9 +79,24 @@ export function openaiResponsesToOpenAIRequest(
   let currentAssistantMsg: JsonRecord | null = null;
   let pendingToolResults: JsonRecord[] = [];
 
-  const inputItems = toArray(root.input);
+  // `input` is a plain string, a list of items, or (some clients) a single item object.
+  // A string — at the top level or as a list entry — is shorthand for a user message.
+  const rawInput = root.input;
+  const inputItems =
+    typeof rawInput === "string"
+      ? rawInput.length > 0
+        ? [rawInput]
+        : []
+      : Array.isArray(rawInput)
+        ? rawInput
+        : rawInput && typeof rawInput === "object"
+          ? [rawInput]
+          : [];
   for (const itemValue of inputItems) {
-    const item = toRecord(itemValue);
+    const item: JsonRecord =
+      typeof itemValue === "string"
+        ? { type: "message", role: "user", content: itemValue }
+        : toRecord(itemValue);
 
     // Determine item type - Droid CLI sends role-based items without 'type' field
     // Fallback: if no type but has role property, treat as message
@@ -328,8 +343,7 @@ export function openaiToOpenAIResponsesRequest(
                 }
                 if (contentItem.type === "image_url") {
                   const imgUrl = contentItem.image_url as
-                    | string
-                    | { url?: string; detail?: string };
+                    string | { url?: string; detail?: string };
                   const imgResult: JsonRecord = {
                     type: "input_image",
                     image_url: typeof imgUrl === "string" ? imgUrl : imgUrl?.url || "",

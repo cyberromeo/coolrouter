@@ -48,10 +48,19 @@ export default function DiversityScoreCard() {
     };
   }, []);
 
-  if (loading || !data) {
+  if (loading) {
     return (
       <Card className="p-5 flex flex-col justify-center items-center min-h-[220px]">
         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
+      </Card>
+    );
+  }
+
+  // The request failed (network error, 401, 500): say so instead of spinning forever.
+  if (!data) {
+    return (
+      <Card className="p-5 flex flex-col justify-center items-center min-h-[220px]">
+        <p className="text-sm text-text-muted">Provider diversity is unavailable right now.</p>
       </Card>
     );
   }

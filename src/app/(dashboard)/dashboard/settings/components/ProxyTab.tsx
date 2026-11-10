@@ -175,7 +175,9 @@ export default function ProxyTab() {
                 onClick={updateUsageTokenBuffer}
                 disabled={bufferSaving || loading || parseInt(bufferInput, 10) === usageTokenBuffer}
               >
-                {bufferSaving ? tc("saving") : tc("save")}
+                {/* common.saving is not in the message files yet; an unguarded tc() would
+                    print the raw key "common.saving" on the button while saving. */}
+                {bufferSaving ? (tc.has("saving") ? tc("saving") : "Saving...") : tc("save")}
               </Button>
               {usageTokenBuffer !== null && parseInt(bufferInput, 10) !== usageTokenBuffer && (
                 <span className="text-xs text-text-muted">Current: {usageTokenBuffer}</span>

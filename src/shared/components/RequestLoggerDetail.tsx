@@ -1,12 +1,38 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   PROTOCOL_COLORS,
   PROVIDER_COLORS,
   getHttpStatusStyle as getStatusStyle,
 } from "@/shared/constants/colors";
 import { formatDuration, formatApiKeyLabel } from "@/shared/utils/formatting";
+
+/**
+ * A request for "openai/gpt-4o" that was served as "gpt-4o" was not rerouted — the prefix
+ * only names the provider. Only a genuinely different model counts as a fallback.
+ */
+export function isReroutedModel(requestedModel, model) {
+  if (!requestedModel || !model) return false;
+  if (requestedModel === model) return false;
+  return !requestedModel.endsWith(`/${model}`);
+}
+
+/** Errors are stored as text, but artifacts on disk can hold the original object. */
+function toErrorText(error) {
+  if (error === null || error === undefined || error === "") return "";
+  if (typeof error === "string") return error;
+  if (typeof error === "object") {
+    const message = error.message || error.error?.message;
+    if (typeof message === "string" && message) return message;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+  return String(error);
+}
 
 // ─── Payload Code Block ─────────────────────────────────────────────────────
 
@@ -46,6 +72,8 @@ function PayloadSection({ title, json, onCopy }) {
 // ─── Detail Modal ───────────────────────────────────────────────────────────
 
 export default function RequestLoggerDetail({ log, detail, loading, onClose, onCopy }) {
+  const closeButtonRef = useRef(null);
+
   // Close on Escape key
   useEffect(() => {
     const handler = (e) => {
@@ -54,6 +82,16 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  // Move keyboard focus into the dialog, and hand it back to the row that opened it.
+  useEffect(() => {
+    const previouslyFocused =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
+    };
+  }, []);
 
   const statusStyle = getStatusStyle(log.status);
   const protocolKey = log.sourceFormat || log.provider;
@@ -70,14 +108,11 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
   };
 
   const formatDate = (iso) => {
-    try {
-      const d = new Date(iso);
-      return (
-        d.toLocaleDateString("pt-BR") + ", " + d.toLocaleTimeString("en-US", { hour12: false })
-      );
-    } catch {
-      return iso;
-    }
+    if (!iso) return "—";
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return String(iso);
+    // The viewer's own date format: a fixed dd/mm/yyyy locale reads as mm/dd to US users.
+    return d.toLocaleDateString() + ", " + d.toLocaleTimeString("en-US", { hour12: false });
   };
 
   const toPrettyJson = (payload) => {
@@ -118,6 +153,8 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
   };
 
   const formatTokenValue = (value) => (value != null ? value.toLocaleString() : "N/A");
+  const requestedModel = detail?.requestedModel || log.requestedModel;
+  const errorText = toErrorText(detail?.error) || toErrorText(log.error);
 
   return (
     <div
@@ -145,6 +182,7 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
             <span className="text-text-muted font-mono text-sm">{log.path}</span>
           </div>
           <button
+            ref={closeButtonRef}
             onClick={onClose}
             className="p-1.5 rounded-lg hover:bg-bg-subtle text-text-muted hover:text-text-primary transition-colors"
             aria-label="Close detail modal"
@@ -208,13 +246,12 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
               </div>
               <div
                 className={`text-sm font-medium font-mono ${
-                  (detail?.requestedModel || log.requestedModel) &&
-                  (detail?.requestedModel || log.requestedModel) !== log.model
+                  isReroutedModel(requestedModel, log.model)
                     ? "text-amber-600 dark:text-amber-400"
                     : "text-text-muted"
                 }`}
               >
-                {detail?.requestedModel || log.requestedModel || "—"}
+                {requestedModel || "—"}
               </div>
             </div>
             <div>
@@ -278,13 +315,13 @@ export default function RequestLoggerDetail({ log, detail, loading, onClose, onC
           </div>
 
           {/* Error Message */}
-          {(detail?.error || log.error) && (
+          {errorText && (
             <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30">
               <div className="text-[10px] text-red-600 dark:text-red-400 uppercase tracking-wider mb-1 font-bold">
                 Error
               </div>
-              <div className="text-sm text-red-600 dark:text-red-300 font-mono">
-                {detail?.error || log.error}
+              <div className="text-sm text-red-600 dark:text-red-300 font-mono whitespace-pre-wrap break-words">
+                {errorText}
               </div>
             </div>
           )}

@@ -5,17 +5,25 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card, Button, Input, Select, Toggle } from "@/shared/components";
 import { AI_PROVIDERS, AUTH_METHODS } from "@/shared/constants/config";
+import { APIKEY_PROVIDERS, FREE_PROVIDERS, OAUTH_PROVIDERS } from "@/shared/constants/providers";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import { useTranslations } from "next-intl";
 
-const providerOptions = Object.values(AI_PROVIDERS).map((p) => ({
-  value: p.id,
-  label: p.name,
-}));
+// POST /api/providers only accepts API-key providers; OAuth providers sign in from their
+// own provider page. Offer each list under the matching auth method.
+const toOptions = (providers: Record<string, { id: string; name: string }>) =>
+  Object.values(providers).map((p) => ({ value: p.id, label: p.name }));
+
+const apiKeyProviderOptions = toOptions(APIKEY_PROVIDERS as any);
+const oauthProviderOptions = toOptions({ ...FREE_PROVIDERS, ...OAUTH_PROVIDERS } as any);
 
 const authMethodOptions = Object.values(AUTH_METHODS).map((m) => ({
   value: m.id,
   label: m.name,
 }));
+
+const API_KEY_METHOD = AUTH_METHODS.apikey.id;
+const OAUTH_METHOD = AUTH_METHODS.oauth.id;
 
 export default function NewProviderPage() {
   const router = useRouter();
@@ -23,48 +31,108 @@ export default function NewProviderPage() {
   const t = useTranslations("providers");
   const [formData, setFormData] = useState({
     provider: "",
-    authMethod: "api_key",
+    authMethod: API_KEY_METHOD,
     apiKey: "",
     displayName: "",
     isActive: true,
   });
   const [errors, setErrors] = useState<any>({});
 
+  const isApiKeyMethod = formData.authMethod === API_KEY_METHOD;
+  const providerOptions = isApiKeyMethod ? apiKeyProviderOptions : oauthProviderOptions;
+
   const handleChange = (field, value) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    if (errors[field]) {
-      setErrors((prev) => ({ ...prev, [field]: null }));
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value };
+      // A provider picked under one auth method may not exist under the other.
+      if (field === "authMethod") {
+        const options = value === API_KEY_METHOD ? apiKeyProviderOptions : oauthProviderOptions;
+        if (!options.some((option) => option.value === prev.provider)) next.provider = "";
+      }
+      return next;
+    });
+    if (errors[field] || errors.submit) {
+      setErrors((prev) => ({ ...prev, [field]: null, submit: null }));
     }
   };
 
   const validate = () => {
     const newErrors: any = {};
     if (!formData.provider) newErrors.provider = t("selectProvider");
-    if (formData.authMethod === "api_key" && !formData.apiKey) {
+    if (isApiKeyMethod && !formData.apiKey.trim()) {
       newErrors.apiKey = t("apiKeyRequired");
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
 
+  // OAuth sign-in (device code / browser flow) lives on the provider's own page.
+  const goToProviderPage = () => {
+    if (!formData.provider) {
+      setErrors({ provider: t("selectProvider") });
+      return;
+    }
+    router.push(`/dashboard/providers/${formData.provider}`);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!validate()) return;
 
+    if (!isApiKeyMethod) {
+      goToProviderPage();
+      return;
+    }
+
     setLoading(true);
     try {
+      // Same rule as the "Add API key" dialog on the provider page: check the key first and
+      // only store working keys, marked active. A connection saved without a status shows
+      // up as "No connections" in the provider list and is left out of the combo model picker.
+      const validation = await fetch("/api/providers/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: formData.provider, apiKey: formData.apiKey.trim() }),
+      })
+        .then((res) => res.json())
+        .catch(() => null);
+      if (!validation?.valid) {
+        setErrors({ submit: t("apiKeyValidationFailed") });
+        return;
+      }
+
       const response = await fetch("/api/providers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        // The API requires `name`; fall back to the provider's name when none was typed.
+        body: JSON.stringify({
+          provider: formData.provider,
+          apiKey: formData.apiKey.trim(),
+          name:
+            formData.displayName.trim() ||
+            (AI_PROVIDERS as any)[formData.provider]?.name ||
+            formData.provider,
+          testStatus: "active",
+        }),
       });
+      const data = await response.json().catch(() => null);
 
-      if (response.ok) {
-        router.push("/dashboard/providers");
-      } else {
-        const data = await response.json();
-        setErrors({ submit: data.error || t("failedCreate") });
+      if (!response.ok) {
+        setErrors({ submit: getApiErrorMessage(data, t("failedCreate")) });
+        return;
       }
+
+      // New connections are always created active; apply the toggle afterwards.
+      const connectionId = data?.connection?.id;
+      if (!formData.isActive && connectionId) {
+        await fetch(`/api/providers/${connectionId}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ isActive: false }),
+        }).catch(() => {});
+      }
+
+      router.push("/dashboard/providers");
     } catch (error) {
       setErrors({ submit: t("errorOccurred") });
     } finally {
@@ -141,10 +209,10 @@ export default function NewProviderPage() {
                   }`}
                 >
                   <span className="material-symbols-outlined">
-                    {method.value === "api_key" ? "key" : "lock"}
+                    {method.value === API_KEY_METHOD ? "key" : "lock"}
                   </span>
                   <span className="font-medium text-center break-words">
-                    {method.value === "api_key" ? t("apiKeyLabel") : t("oauth2Label")}
+                    {method.value === API_KEY_METHOD ? t("apiKeyLabel") : t("oauth2Label")}
                   </span>
                 </button>
               ))}
@@ -152,7 +220,7 @@ export default function NewProviderPage() {
           </div>
 
           {/* API Key Input */}
-          {formData.authMethod === "api_key" && (
+          {isApiKeyMethod && (
             <Input
               label={t("apiKeyLabel")}
               type="password"
@@ -166,35 +234,41 @@ export default function NewProviderPage() {
           )}
 
           {/* OAuth2 Button */}
-          {formData.authMethod === "oauth2" && (
+          {formData.authMethod === OAUTH_METHOD && (
             <Card.Section className="">
               <p className="text-sm text-text-muted mb-4">{t("oauth2Desc")}</p>
-              <Button type="button" variant="secondary" icon="link">
+              <Button type="button" variant="secondary" icon="link" onClick={goToProviderPage}>
                 {t("oauth2Connect")}
               </Button>
             </Card.Section>
           )}
 
-          {/* Display Name */}
-          <Input
-            label={t("displayName")}
-            placeholder={t("displayNamePlaceholder")}
-            value={formData.displayName}
-            onChange={(e) => handleChange("displayName", e.target.value)}
-            hint={t("displayNameHint")}
-          />
+          {/* Display name and active toggle only apply to API-key connections created here */}
+          {isApiKeyMethod && (
+            <>
+              <Input
+                label={t("displayName")}
+                placeholder={t("displayNamePlaceholder")}
+                value={formData.displayName}
+                onChange={(e) => handleChange("displayName", e.target.value)}
+                hint={t("displayNameHint")}
+              />
 
-          {/* Active Toggle */}
-          <Toggle
-            checked={formData.isActive}
-            onChange={(checked) => handleChange("isActive", checked)}
-            label={t("active")}
-            description={t("activeDescription")}
-          />
+              <Toggle
+                checked={formData.isActive}
+                onChange={(checked) => handleChange("isActive", checked)}
+                label={t("active")}
+                description={t("activeDescription")}
+              />
+            </>
+          )}
 
           {/* Error Message */}
           {errors.submit && (
-            <div className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm">
+            <div
+              role="alert"
+              className="p-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm"
+            >
               {errors.submit as string}
             </div>
           )}
@@ -206,9 +280,11 @@ export default function NewProviderPage() {
                 {t("cancel")}
               </Button>
             </Link>
-            <Button type="submit" loading={loading} fullWidth className="flex-1">
-              {t("createProvider")}
-            </Button>
+            {isApiKeyMethod && (
+              <Button type="submit" loading={loading} fullWidth className="flex-1">
+                {t("createProvider")}
+              </Button>
+            )}
           </div>
         </form>
       </Card>

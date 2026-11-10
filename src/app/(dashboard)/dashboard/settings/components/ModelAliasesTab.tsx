@@ -28,6 +28,7 @@ export default function ModelAliasesTab() {
   const addAlias = async () => {
     if (!newFrom.trim() || !newTo.trim()) return;
     setSaving(true);
+    setStatus("");
     try {
       const res = await fetch("/api/settings/model-aliases", {
         method: "POST",
@@ -36,11 +37,13 @@ export default function ModelAliasesTab() {
       });
       if (res.ok) {
         const data = await res.json();
-        setCustom(data.custom);
+        setCustom(data.custom || {});
         setNewFrom("");
         setNewTo("");
         setStatus("saved");
         setTimeout(() => setStatus(""), 2000);
+      } else {
+        setStatus("error");
       }
     } catch {
       setStatus("error");
@@ -51,6 +54,7 @@ export default function ModelAliasesTab() {
 
   const removeAlias = async (from: string) => {
     setSaving(true);
+    setStatus("");
     try {
       const res = await fetch("/api/settings/model-aliases", {
         method: "DELETE",
@@ -59,9 +63,11 @@ export default function ModelAliasesTab() {
       });
       if (res.ok) {
         const data = await res.json();
-        setCustom(data.custom);
+        setCustom(data.custom || {});
         setStatus("saved");
         setTimeout(() => setStatus(""), 2000);
+      } else {
+        setStatus("error");
       }
     } catch {
       setStatus("error");
@@ -91,6 +97,15 @@ export default function ModelAliasesTab() {
           <span className="ml-auto text-xs font-medium text-emerald-500 flex items-center gap-1">
             <span className="material-symbols-outlined text-[14px]">check_circle</span>{" "}
             {t("saved") || "Saved"}
+          </span>
+        )}
+        {/* "error" was set on failure but never shown, so a failed add/remove looked like a no-op */}
+        {status === "error" && (
+          <span
+            className="ml-auto text-xs font-medium text-red-500 flex items-center gap-1"
+            role="alert"
+          >
+            <span className="material-symbols-outlined text-[14px]">error</span> {t("saveFailed")}
           </span>
         )}
       </div>

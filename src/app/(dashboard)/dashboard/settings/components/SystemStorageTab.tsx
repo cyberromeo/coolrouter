@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Card, Button, Badge } from "@/shared/components";
+import { getApiErrorMessage } from "@/shared/utils/apiErrorMessage";
 import { useLocale, useTranslations } from "next-intl";
 
 export default function SystemStorageTab() {
@@ -87,7 +88,10 @@ export default function SystemStorageTab() {
         await loadStorageHealth();
         if (backupsExpanded) await loadBackups();
       } else {
-        setManualBackupStatus({ type: "error", message: data.error || t("backupFailed") });
+        setManualBackupStatus({
+          type: "error",
+          message: getApiErrorMessage(data, t("backupFailed")),
+        });
       }
     } catch {
       setManualBackupStatus({ type: "error", message: t("errorOccurred") });
@@ -119,7 +123,7 @@ export default function SystemStorageTab() {
         await loadBackups();
         await loadStorageHealth();
       } else {
-        setRestoreStatus({ type: "error", message: data.error || t("restoreFailed") });
+        setRestoreStatus({ type: "error", message: getApiErrorMessage(data, t("restoreFailed")) });
       }
     } catch {
       setRestoreStatus({ type: "error", message: t("errorDuringRestore") });
@@ -154,7 +158,7 @@ export default function SystemStorageTab() {
     const res = await fetch(apiUrl);
     if (!res.ok) {
       const data = await res.json().catch(() => ({}));
-      throw new Error((data as { error?: string }).error || errorMessage);
+      throw new Error(getApiErrorMessage(data, errorMessage));
     }
     const blob = await res.blob();
     const disposition = res.headers.get("Content-Disposition") || "";
@@ -215,7 +219,10 @@ export default function SystemStorageTab() {
           await loadStorageHealth();
           if (backupsExpanded) await loadBackups();
         } else {
-          setImportStatus({ type: "error", message: data.error || "Failed to import JSON" });
+          setImportStatus({
+            type: "error",
+            message: getApiErrorMessage(data, "Failed to import JSON"),
+          });
         }
       } catch (err) {
         setImportStatus({ type: "error", message: "Error during JSON import" });
@@ -294,7 +301,7 @@ export default function SystemStorageTab() {
         await loadStorageHealth();
         if (backupsExpanded) await loadBackups();
       } else {
-        setImportStatus({ type: "error", message: data.error || t("importFailed") });
+        setImportStatus({ type: "error", message: getApiErrorMessage(data, t("importFailed")) });
       }
     } catch {
       setImportStatus({ type: "error", message: t("errorDuringImport") });
@@ -593,7 +600,7 @@ export default function SystemStorageTab() {
                 } else {
                   setClearCacheStatus({
                     type: "error",
-                    message: data.error || t("clearCacheFailed") || "Failed to clear cache",
+                    message: getApiErrorMessage(data, t("clearCacheFailed")),
                   });
                 }
               } catch {
@@ -619,16 +626,18 @@ export default function SystemStorageTab() {
                 const res = await fetch("/api/settings/purge-logs", { method: "POST" });
                 const data = await res.json();
                 if (res.ok) {
+                  // settings.logsDeleted is not in the message files yet. A missing key makes
+                  // t() return the key path (truthy), so `||` never reached the fallback.
                   setPurgeLogsStatus({
                     type: "success",
-                    message:
-                      t("logsDeleted", { count: data.deleted }) ||
-                      `Purged ${data.deleted} expired log(s)`,
+                    message: t.has("logsDeleted")
+                      ? t("logsDeleted", { count: data.deleted })
+                      : `Purged ${data.deleted} expired log(s)`,
                   });
                 } else {
                   setPurgeLogsStatus({
                     type: "error",
-                    message: data.error || t("purgeLogsFailed") || "Failed to purge logs",
+                    message: getApiErrorMessage(data, t("purgeLogsFailed")),
                   });
                 }
               } catch {
