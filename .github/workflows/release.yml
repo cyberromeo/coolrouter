@@ -62,6 +62,35 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest,enable=${{ env.PUBLISH == 'true' }}
             type=raw,value=dry-run,enable=${{ env.PUBLISH != 'true' }}
+      # Run the image before publishing anything: build it for this machine, start a
+      # container and wait for its health check. The multi-arch build below reuses the
+      # cached layers.
+      - name: Build image for the smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: runner-base
+          platforms: linux/amd64
+          load: true
+          tags: cool-router:smoke
+          provenance: false
+      - name: Smoke test the image
+        run: |
+          docker run -d --name cool-router-smoke -p 20128:20128 cool-router:smoke
+          for i in $(seq 1 60); do
+            if curl -fsS -o /dev/null http://127.0.0.1:20128/api/monitoring/health; then
+              echo "Container answered after ${i}s"
+              curl -fsS http://127.0.0.1:20128/api/settings/require-login
+              echo
+              curl -fsS -o /dev/null http://127.0.0.1:20128/v1/models
+              docker rm -f cool-router-smoke
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The container did not become healthy"
+          docker logs cool-router-smoke
+          exit 1
       - id: build
         uses: docker/build-push-action@v6
         with:
@@ -171,6 +200,15 @@ jobs:
             export CSC_LINK="$WIN_CSC_LINK" CSC_KEY_PASSWORD="$WIN_CSC_KEY_PASSWORD"
           fi
           npx electron-builder --win --publish never
+
+      # A packaged app must run from its own files. Links or paths that point back into
+      # this checkout work here and nowhere else (0.1.0 and 0.1.1 shipped macOS and Linux
+      # builds like that), so take the build tree away before launching it.
+      - name: Hide the build tree
+        shell: bash
+        run: |
+          mv .next .next.hidden
+          mv node_modules node_modules.hidden || echo "::warning::node_modules could not be moved aside"
 
       # Launch the packaged app: server starts, first-run password flow works, the auth
       # gate holds, and the server stops when the app is killed.

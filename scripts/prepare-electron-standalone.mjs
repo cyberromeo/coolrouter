@@ -7,6 +7,9 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  realpathSync,
+  rmdirSync,
+  unlinkSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -132,6 +135,58 @@ function assertBundleIsPackagable(bundleDir) {
   }
 }
 
+function removeLink(linkPath) {
+  try {
+    unlinkSync(linkPath);
+  } catch {
+    rmdirSync(linkPath); // Windows directory junction
+  }
+}
+
+/**
+ * Replace every symlink in the bundle with a real copy of what it points to.
+ *
+ * The server loads its native and external packages through links that Turbopack writes
+ * to .next/node_modules (better-sqlite3-<hash> -> …/node_modules/better-sqlite3).
+ * `cpSync` is asked to dereference, but on macOS and Linux it re-creates such links with
+ * an absolute target inside *this checkout*. The packaged app then works on the build
+ * machine and nowhere else: on a user's machine the link dangles, the database driver
+ * cannot be loaded and the server never comes up. (macOS code signing also rejects
+ * links that leave the bundle.) A bundle made only of real files has neither problem.
+ */
+function materializeSymlinks(dir) {
+  let replaced = 0;
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isSymbolicLink()) {
+      let target = null;
+      try {
+        target = realpathSync(entryPath);
+      } catch {
+        // Dangling link: nothing to copy, and nothing could have been loading it.
+      }
+      removeLink(entryPath);
+      if (target) {
+        cpSync(target, entryPath, { recursive: true, dereference: true });
+        replaced += 1;
+        if (lstatSync(entryPath).isDirectory()) replaced += materializeSymlinks(entryPath);
+      }
+    } else if (entry.isDirectory()) {
+      replaced += materializeSymlinks(entryPath);
+    }
+  }
+  return replaced;
+}
+
+function findSymlinks(dir, found = []) {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const entryPath = join(dir, entry.name);
+    if (entry.isSymbolicLink()) found.push(entryPath);
+    else if (entry.isDirectory()) findSymlinks(entryPath, found);
+  }
+  return found;
+}
+
 function logContextualError(error) {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`[electron] failed to prepare standalone bundle: ${message}`);
@@ -174,6 +229,22 @@ ensurePackage(
   join(ELECTRON_STANDALONE_DIR, "node_modules", "better-sqlite3"),
   join(ROOT, "node_modules", "better-sqlite3")
 );
+
+const materialized = materializeSymlinks(ELECTRON_STANDALONE_DIR);
+if (materialized > 0) {
+  console.log(`[electron] replaced ${materialized} symlink(s) with real copies`);
+}
+
+const leftoverLinks = findSymlinks(ELECTRON_STANDALONE_DIR);
+if (leftoverLinks.length > 0) {
+  const listed = leftoverLinks
+    .slice(0, 10)
+    .map((link) => relative(ELECTRON_STANDALONE_DIR, link))
+    .join(", ");
+  throw new Error(
+    `The desktop bundle still contains symlinks, so it would depend on this machine: ${listed}`
+  );
+}
 
 console.log(
   `[electron] prepared standalone bundle: ${relative(ROOT, ELECTRON_STANDALONE_DIR) || "."}`
