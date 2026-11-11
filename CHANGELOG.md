@@ -4,6 +4,39 @@ All notable changes to Cool Router are documented here.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-11-11
+
+A simpler Cool Router: add your providers, choose which of their models answer Opus, Sonnet and Haiku, and connect Claude Code, Claude Desktop or Codex in a click.
+
+### New — three steps instead of nine pages
+
+- **The menu is now Home, Providers, Model map and Connect apps.** Combos, API keys, Playground, Usage and Logs are folded under **Advanced** in the sidebar; nothing was removed.
+- **Home** shows the three steps with live status and highlights the next one.
+- **Providers**: your connections at the top, and a gallery of every provider grouped by how you pay — Pay per use, Subscriptions, Free, On this computer, Custom URL — with search. Connecting needs one key or one sign-in; the models are fetched automatically. **On this computer** finds Ollama, LM Studio and llama.cpp on their usual ports with nothing to type. The previous all-cards page is still there as **Detailed view**.
+- **Model map**: a mind map of your apps, Cool Router and three routes named after Claude's tiers — Opus, Sonnet and Haiku. Drag models to set the order they're tried in, or use the list view. **Arrange for me** fills the routes from your models (most capable on Opus, cheapest on Haiku), and the first provider you connect fills an empty map by itself.
+- **Your models answer Claude's names.** Requests for `claude-opus-…`, `claude-sonnet-…` and `claude-haiku-…` (and `opus`, `sonnet`, `haiku`, `auto`) go to the matching route, so Claude Code and Claude Desktop work with any provider. The rules switch on the first time you save the map or connect an app; until then `claude-…` requests route as before. Provider-prefixed names like `cc/claude-…` are never affected.
+- **Connect apps**, with a guide for each:
+  - **Claude Code** — one click writes `~/.claude/settings.json` (backup kept). Disconnect restores exactly the values that were there.
+  - **Claude Desktop** — a setup file to import under Developer → Configure Third-Party Inference, with step-by-step instructions.
+  - **Codex** — one click adds a `coolrouter` provider to `~/.codex/config.toml`, pointed at the route you choose; comments and other settings stay.
+  - **Any other app** — address, key and SDK/curl snippets.
+  - Each app gets its own key, and its card turns **Live** when the app's first message arrives. A changed port is detected and offers an update.
+
+### Fixed — Claude Code through other models
+
+- **Tool use through non-Claude models.** A tool's output reached OpenAI-format models and Gemini as "[No response received]", with the real output pasted as a separate message, so Claude Code's file reads, edits and commands broke on every non-Claude model.
+- **Claude Code to the Anthropic API** is now passed through untouched. Before, every request was rewritten through an OpenAI-shaped round trip that dropped thinking, effort, server tools and documents. Claude Code's real user agent (`claude-cli/…`) is now recognised, and its `anthropic-beta` header is forwarded.
+- A request that names a newer Claude model (as Claude Code does) is adjusted when a route serves it with an older Claude model: adaptive thinking, effort levels and unsigned thinking from other providers no longer cause 400 errors.
+- Anthropic server tools (web search, code execution, …) are no longer offered to other models as empty functions they would call in vain.
+- OpenAI: requests use `max_completion_tokens`, and GPT-5 / o-series models no longer receive sampling parameters or replayed reasoning they reject. Groq and Mistral no longer receive replayed reasoning either.
+- Codex routed to a Chat Completions provider no longer sends Responses-only fields that strict providers reject.
+- A route now moves on to its next model when a model rejects a request for being too long, using an unsupported field, or containing images it can't read.
+- A stream that ends without a finish reason still ends the Anthropic message, so Claude Code doesn't wait forever.
+
+### Security
+
+- The new dashboard routes that write app config files or create keys accept only the signed-in dashboard (not a client API key), only same-origin JSON requests, and refuse to write files while the server is reachable from other devices without a password.
+
 ## [0.1.2] — 2026-11-10
 
 A bug-fix release. If 0.1.1 would not open on your Mac, or the setup wizard and sign-in seemed to ignore your password, this is the fix.

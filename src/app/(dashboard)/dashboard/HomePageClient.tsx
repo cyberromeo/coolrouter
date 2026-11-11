@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
-import { Card } from "@/shared/components";
+import { useTranslations } from "next-intl";
+import Button from "@/shared/components/Button";
+import ProviderIcon from "@/shared/components/ProviderIcon";
+import { cn } from "@/shared/utils/cn";
 import { copyToClipboard } from "@/shared/utils/clipboard";
+import { TIER_META, TIERS } from "./map/tierMeta";
 
 // Used for the server render only when the request's own origin could not be determined.
 const FALLBACK_ORIGIN = "http://localhost:20128";
@@ -12,23 +16,15 @@ const FALLBACK_ORIGIN = "http://localhost:20128";
 const subscribeToNothing = () => () => {};
 const getBrowserOrigin = () => window.location.origin;
 
-type Stats = {
+type AppStatus = { connected: boolean; needsUpdate?: boolean; keyRevoked?: boolean } | null;
+
+interface HomeState {
   providers: number | null;
-  keys: number | null;
-  combos: number | null;
-  models: number | null;
+  routes: Record<string, { first: string | null; count: number }> | null;
+  apps: { claudeCode: AppStatus; claudeDesktop: AppStatus; codex: AppStatus };
   requests: number | null;
   tokens: number | null;
-};
-
-const EMPTY_STATS: Stats = {
-  providers: null,
-  keys: null,
-  combos: null,
-  models: null,
-  requests: null,
-  tokens: null,
-};
+}
 
 async function getJson(url: string) {
   try {
@@ -42,19 +38,19 @@ async function getJson(url: string) {
 
 function formatNumber(value: number | null) {
   if (value === null) return "—";
-  return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(
+  return new Intl.NumberFormat(undefined, { notation: "compact", maximumFractionDigits: 1 }).format(
     value
   );
 }
 
-function CopyButton({ value, label = "Copy" }: { value: string; label?: string }) {
+function CopyButton({ value }: { value: string }) {
+  const t = useTranslations("home");
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
       onClick={async () => {
-        // copyToClipboard falls back to execCommand on plain-HTTP (LAN / Docker) origins,
-        // where navigator.clipboard does not exist.
+        // copyToClipboard falls back to execCommand on plain-HTTP (LAN / Docker) origins.
         if (await copyToClipboard(value)) {
           setCopied(true);
           setTimeout(() => setCopied(false), 1500);
@@ -65,20 +61,77 @@ function CopyButton({ value, label = "Copy" }: { value: string; label?: string }
       <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
         {copied ? "check" : "content_copy"}
       </span>
-      {copied ? "Copied" : label}
+      {copied ? t("copied") : t("copy")}
     </button>
   );
 }
 
-function StatTile({ label, value, href }: { label: string; value: string; href: string }) {
+interface StepCardProps {
+  number: number;
+  title: string;
+  done: boolean;
+  current: boolean;
+  summary: ReactNode;
+  href: string;
+  action: string;
+}
+
+function StepCard({ number, title, done, current, summary, href, action }: StepCardProps) {
+  const t = useTranslations("home");
   return (
-    <Link
-      href={href}
-      className="group rounded-lg border border-border bg-surface p-4 transition-colors hover:border-black/20 dark:hover:border-white/25"
+    <div
+      className={cn(
+        "flex flex-col rounded-xl border bg-surface p-5 shadow-soft transition-colors",
+        current ? "border-accent/60 ring-1 ring-accent/30" : "border-border"
+      )}
     >
-      <p className="text-xs font-medium uppercase tracking-wider text-text-muted">{label}</p>
-      <p className="mt-2 text-2xl font-semibold tracking-tight text-text-main">{value}</p>
-    </Link>
+      <div className="flex items-center gap-3">
+        <span
+          className={cn(
+            "flex size-8 items-center justify-center rounded-full text-sm font-semibold",
+            done
+              ? "bg-success/15 text-success"
+              : current
+                ? "bg-accent text-white"
+                : "bg-bg text-text-muted"
+          )}
+          aria-hidden="true"
+        >
+          {done ? <span className="material-symbols-outlined text-[18px]">check</span> : number}
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
+            {t("step", { number })}
+          </p>
+          <h2 className="font-semibold text-text-main">{title}</h2>
+        </div>
+      </div>
+      <div className="mt-4 min-h-[56px] flex-1 text-sm text-text-muted">{summary}</div>
+      <Link href={href} className="mt-4">
+        <Button variant={current ? "primary" : "secondary"} fullWidth iconRight="arrow_forward">
+          {action}
+        </Button>
+      </Link>
+    </div>
+  );
+}
+
+function AppLine({ label, icon, status }: { label: string; icon: string; status: AppStatus }) {
+  const t = useTranslations("home");
+  const needsAttention = status?.connected && (status.needsUpdate || status.keyRevoked);
+  return (
+    <span className="flex items-center gap-2">
+      <ProviderIcon providerId={icon} size={16} type="color" />
+      <span className="text-text-main">{label}</span>
+      <span
+        className={cn(
+          "ml-auto text-xs",
+          needsAttention ? "text-warning" : status?.connected ? "text-success" : "text-text-muted"
+        )}
+      >
+        {needsAttention ? t("appNeedsUpdate") : status?.connected ? t("appConnected") : "—"}
+      </span>
+    </span>
   );
 }
 
@@ -89,198 +142,193 @@ export default function HomePageClient({
   /** Origin of the incoming request, resolved on the server. */
   initialOrigin?: string;
 }) {
-  // Hydrate with the value the server rendered, then switch to the browser's origin. Reading
-  // window in a useState initializer made the client disagree with the server HTML, and
-  // React keeps the server text in that case — the page kept showing port 20128 on any
-  // other port or host. useSyncExternalStore re-renders with the browser value once
-  // hydration is done.
+  const t = useTranslations("home");
+  const tMap = useTranslations("modelMap");
+  // Hydrate with the value the server rendered, then switch to the browser's origin.
   const origin = useSyncExternalStore(
     subscribeToNothing,
     getBrowserOrigin,
     () => initialOrigin || FALLBACK_ORIGIN
   );
-  const [stats, setStats] = useState<Stats>(EMPTY_STATS);
-  const [snippet, setSnippet] = useState<"curl" | "python" | "node">("curl");
+  const [state, setState] = useState<HomeState | null>(null);
 
   useEffect(() => {
     Promise.all([
       getJson("/api/providers"),
-      getJson("/api/keys"),
-      getJson("/api/combos"),
-      // The catalog apps actually see (also what API Manager and Playground count).
-      // /api/models only lists built-in registry models, so a custom OpenAI-compatible
-      // provider with imported models showed up here as 0 models.
-      getJson("/v1/models"),
+      getJson("/api/model-map"),
+      getJson("/api/cli-tools/claude-settings"),
+      getJson("/api/cli-tools/claude-desktop"),
+      getJson("/api/cli-tools/codex-settings"),
       getJson("/api/usage/analytics?range=24h"),
-    ]).then(([providers, keys, combos, models, usage]) => {
-      setStats({
+    ]).then(([providers, modelMap, claudeCode, claudeDesktop, codex, usage]) => {
+      const models = new Map<string, string>(
+        (Array.isArray(modelMap?.models) ? modelMap.models : []).map(
+          (m: { id: string; name: string }) => [m.id, m.name]
+        )
+      );
+      const routes = modelMap?.map?.routes
+        ? Object.fromEntries(
+            TIERS.map((tier) => {
+              const ids: string[] = modelMap.map.routes[tier]?.models ?? [];
+              return [
+                tier,
+                {
+                  first: ids[0] ? models.get(ids[0]) || ids[0].split("/").pop() || null : null,
+                  count: ids.length,
+                },
+              ];
+            })
+          )
+        : null;
+      setState({
         providers: Array.isArray(providers?.connections) ? providers.connections.length : null,
-        keys: typeof keys?.total === "number" ? keys.total : null,
-        combos: Array.isArray(combos?.combos) ? combos.combos.length : null,
-        models: Array.isArray(models?.models)
-          ? models.models.length
-          : Array.isArray(models?.data)
-            ? models.data.length
-            : null,
+        routes,
+        apps: { claudeCode, claudeDesktop, codex },
         requests: usage?.summary?.totalRequests ?? null,
         tokens: usage?.summary?.totalTokens ?? null,
       });
     });
   }, []);
 
-  const baseUrl = `${origin}/v1`;
-
-  const snippets = useMemo(
-    () => ({
-      curl: `curl ${baseUrl}/chat/completions \\
-  -H "Authorization: Bearer $COOL_ROUTER_KEY" \\
-  -H "Content-Type: application/json" \\
-  -d '{"model": "<provider>/<model>", "messages": [{"role": "user", "content": "Hello!"}]}'`,
-      python: `from openai import OpenAI
-
-client = OpenAI(base_url="${baseUrl}", api_key="<your Cool Router key>")
-reply = client.chat.completions.create(
-    model="<provider>/<model>",
-    messages=[{"role": "user", "content": "Hello!"}],
-)
-print(reply.choices[0].message.content)`,
-      node: `import OpenAI from "openai";
-
-const client = new OpenAI({ baseURL: "${baseUrl}", apiKey: "<your Cool Router key>" });
-const reply = await client.chat.completions.create({
-  model: "<provider>/<model>",
-  messages: [{ role: "user", content: "Hello!" }],
-});
-console.log(reply.choices[0].message.content);`,
-    }),
-    [baseUrl]
-  );
-
-  const steps = [
-    {
-      done: (stats.providers ?? 0) > 0,
-      title: "Connect a provider",
-      desc: "Add an API key or sign in to OpenAI, Anthropic, Gemini, OpenRouter and more.",
-      href: "/dashboard/providers",
-      cta: "Add provider",
-    },
-    {
-      done: (stats.keys ?? 0) > 0,
-      title: "Create an API key",
-      desc: "Your apps use this key to talk to Cool Router.",
-      href: "/dashboard/api-manager",
-      cta: "Create key",
-    },
-    {
-      done: (stats.combos ?? 0) > 0,
-      title: "Add a fallback combo (optional)",
-      desc: "Chain models so a rate limit or outage never stops you.",
-      href: "/dashboard/combos",
-      cta: "New combo",
-    },
-  ];
+  const providersDone = (state?.providers ?? 0) > 0;
+  const mapDone = Boolean(state?.routes && TIERS.some((tier) => state.routes[tier].count > 0));
+  const apps = state?.apps;
+  const connectedApps = apps
+    ? [apps.claudeCode, apps.claudeDesktop, apps.codex].filter((a) => a?.connected).length
+    : 0;
+  const appsDone = connectedApps > 0;
+  const needsUpdate = apps
+    ? [apps.claudeCode, apps.claudeDesktop, apps.codex].some(
+        (a) => a?.connected && (a.needsUpdate || a.keyRevoked)
+      )
+    : false;
+  const currentStep = !providersDone ? 1 : !mapDone ? 2 : !appsDone ? 3 : 0;
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Endpoint */}
-      <Card>
-        <div className="flex flex-col gap-4">
-          <div>
-            <h2 className="text-lg font-semibold tracking-tight">Your endpoint</h2>
-            <p className="text-sm text-text-muted">
-              Works with any OpenAI-compatible app, SDK or coding tool.
-            </p>
-          </div>
-          <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-            <code className="flex-1 truncate rounded-md border border-border bg-bg px-3 py-2 font-mono text-sm text-text-main">
-              {baseUrl}
-            </code>
-            <CopyButton value={baseUrl} label="Copy URL" />
-          </div>
+      <div>
+        <h2 className="text-xl font-semibold tracking-tight text-text-main">
+          {currentStep === 0 ? t("allSetTitle") : t("welcomeTitle")}
+        </h2>
+        <p className="mt-1 max-w-2xl text-sm text-text-muted">
+          {currentStep === 0 ? t("allSetBody") : t("welcomeBody")}
+        </p>
+      </div>
 
-          <div className="overflow-hidden rounded-md border border-border">
-            <div className="flex items-center justify-between border-b border-border bg-bg px-2">
-              <div className="flex">
-                {(["curl", "python", "node"] as const).map((id) => (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={() => setSnippet(id)}
-                    className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
-                      snippet === id
-                        ? "border-text-main text-text-main"
-                        : "border-transparent text-text-muted hover:text-text-main"
-                    }`}
-                  >
-                    {id === "curl" ? "cURL" : id === "python" ? "Python" : "Node.js"}
-                  </button>
-                ))}
-              </div>
-              <CopyButton value={snippets[snippet]} />
-            </div>
-            <pre className="overflow-x-auto bg-bg p-4 font-mono text-[12.5px] leading-relaxed text-text-main">
-              {snippets[snippet]}
-            </pre>
-          </div>
+      {needsUpdate && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/5 px-4 py-3">
+          <p className="text-sm text-text-main">{t("needsUpdateBanner")}</p>
+          <Link
+            href="/dashboard/connect"
+            className="text-sm font-medium text-accent hover:underline"
+          >
+            {t("needsUpdateAction")}
+          </Link>
         </div>
-      </Card>
+      )}
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatTile
-          label="Providers"
-          value={formatNumber(stats.providers)}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <StepCard
+          number={1}
+          title={t("step1Title")}
+          done={providersDone}
+          current={currentStep === 1}
           href="/dashboard/providers"
+          action={providersDone ? t("step1Manage") : t("step1Action")}
+          summary={
+            state === null
+              ? t("loading")
+              : providersDone
+                ? t("step1Done", { count: state.providers ?? 0 })
+                : t("step1Empty")
+          }
         />
-        <StatTile label="Models" value={formatNumber(stats.models)} href="/dashboard/playground" />
-        <StatTile
-          label="Requests · 24h"
-          value={formatNumber(stats.requests)}
-          href="/dashboard/logs"
+        <StepCard
+          number={2}
+          title={t("step2Title")}
+          done={mapDone}
+          current={currentStep === 2}
+          href="/dashboard/map"
+          action={mapDone ? t("step2Manage") : t("step2Action")}
+          summary={
+            mapDone && state?.routes ? (
+              <ul className="flex flex-col gap-1.5">
+                {TIERS.map((tier) => (
+                  <li key={tier} className="flex items-center gap-2">
+                    <span
+                      className="size-2 shrink-0 rounded-full"
+                      style={{ backgroundColor: TIER_META[tier].colorVar }}
+                      aria-hidden="true"
+                    />
+                    <span className="w-16 shrink-0 text-text-main">
+                      {tMap(`tiers.${tier}.name`)}
+                    </span>
+                    <span className="truncate">{state.routes[tier].first ?? t("borrowed")}</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              t("step2Empty")
+            )
+          }
         />
-        <StatTile
-          label="Tokens · 24h"
-          value={formatNumber(stats.tokens)}
-          href="/dashboard/analytics"
+        <StepCard
+          number={3}
+          title={t("step3Title")}
+          done={appsDone}
+          current={currentStep === 3}
+          href="/dashboard/connect"
+          action={appsDone ? t("step3Manage") : t("step3Action")}
+          summary={
+            <span className="flex flex-col gap-1.5">
+              <AppLine label="Claude Code" icon="claude" status={apps?.claudeCode ?? null} />
+              <AppLine
+                label="Claude Desktop"
+                icon="anthropic"
+                status={apps?.claudeDesktop ?? null}
+              />
+              <AppLine label="Codex" icon="codex" status={apps?.codex ?? null} />
+            </span>
+          }
         />
       </div>
 
-      {/* Getting started */}
-      <Card>
-        <h2 className="mb-1 text-lg font-semibold tracking-tight">Get started</h2>
-        <p className="mb-4 text-sm text-text-muted">Three steps and you&apos;re routing.</p>
-        <ol className="flex flex-col divide-y divide-border">
-          {steps.map((step, index) => (
-            <li key={step.title} className="flex items-center gap-4 py-3">
-              <span
-                className={`flex size-7 shrink-0 items-center justify-center rounded-full border text-xs font-semibold ${
-                  step.done
-                    ? "border-transparent bg-primary text-primary-foreground"
-                    : "border-border text-text-muted"
-                }`}
-              >
-                {step.done ? (
-                  <span className="material-symbols-outlined text-[16px]" aria-hidden="true">
-                    check
-                  </span>
-                ) : (
-                  index + 1
-                )}
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-text-main">{step.title}</p>
-                <p className="text-sm text-text-muted">{step.desc}</p>
-              </div>
-              <Link
-                href={step.href}
-                className="inline-flex h-8 shrink-0 items-center rounded-md border border-border px-3 text-xs font-medium text-text-main transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
-              >
-                {step.cta}
-              </Link>
-            </li>
-          ))}
-        </ol>
-      </Card>
+      <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr]">
+        <div className="rounded-xl border border-border bg-surface p-5 shadow-soft">
+          <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
+            {t("endpointTitle")}
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 truncate rounded-lg bg-bg px-3 py-2 font-mono text-sm text-text-main">
+              {origin}/v1
+            </code>
+            <CopyButton value={`${origin}/v1`} />
+          </div>
+          <p className="mt-2 text-xs text-text-muted">{t("endpointHint")}</p>
+        </div>
+        <Link
+          href="/dashboard/analytics"
+          className="rounded-xl border border-border bg-surface p-5 shadow-soft transition-colors hover:border-black/20 dark:hover:border-white/25"
+        >
+          <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
+            {t("requests24h")}
+          </p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight text-text-main">
+            {formatNumber(state?.requests ?? null)}
+          </p>
+        </Link>
+        <Link
+          href="/dashboard/analytics"
+          className="rounded-xl border border-border bg-surface p-5 shadow-soft transition-colors hover:border-black/20 dark:hover:border-white/25"
+        >
+          <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
+            {t("tokens24h")}
+          </p>
+          <p className="mt-2 text-2xl font-semibold tracking-tight text-text-main">
+            {formatNumber(state?.tokens ?? null)}
+          </p>
+        </Link>
+      </div>
     </div>
   );
 }

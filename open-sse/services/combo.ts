@@ -36,6 +36,17 @@ const COMBO_BAD_REQUEST_FALLBACK_PATTERNS = [
   /third-party apps/i,
 ];
 
+// The request is fine but too big or too rich for this one model; the next target
+// (larger context, vision, a provider that accepts the field) may well succeed.
+// Providers use 400, 413 (size) or 422 (Mistral and others, for unexpected fields).
+const COMBO_MODEL_LOCAL_PATTERNS = [
+  /context[_ ]length|context window|maximum context|prompt is too long|too many (?:input )?tokens/i,
+  /extra inputs are not permitted|unrecognized request argument|unknown (?:parameter|field)/i,
+  /unsupported (?:parameter|value|field)|is not supported (?:with|by|for) this model/i,
+  /(?:does not|doesn't) support (?:image|vision|tool)|image input is not supported/i,
+];
+const COMBO_MODEL_LOCAL_STATUSES = new Set([400, 413, 422]);
+
 const MAX_COMBO_DEPTH = 3;
 
 // Bootstrap defaults from ClawRouter benchmark (used when no local latency history exists yet)
@@ -372,9 +383,15 @@ function extractPromptForIntent(body) {
 }
 
 export function shouldFallbackComboBadRequest(status, errorText) {
-  if (status !== 400 || !errorText) return false;
+  if (!errorText) return false;
   const message = String(errorText);
-  return COMBO_BAD_REQUEST_FALLBACK_PATTERNS.some((pattern) => pattern.test(message));
+  if (status === 400 && COMBO_BAD_REQUEST_FALLBACK_PATTERNS.some((p) => p.test(message))) {
+    return true;
+  }
+  return (
+    COMBO_MODEL_LOCAL_STATUSES.has(status) &&
+    COMBO_MODEL_LOCAL_PATTERNS.some((pattern) => pattern.test(message))
+  );
 }
 
 function mapIntentToTaskType(intent) {

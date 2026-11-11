@@ -8,12 +8,14 @@ const ids = (sectionId) =>
     (item) => item.id
   );
 
-test("primary sidebar keeps only the core gateway pages", () => {
-  assert.deepEqual(ids("primary"), ["home", "providers", "combos", "api-manager", "playground"]);
+test("primary sidebar is the simple three-step app", () => {
+  assert.deepEqual(ids("primary"), ["home", "providers", "map", "connect"]);
 });
 
-test("monitor sidebar shows usage then logs", () => {
-  assert.deepEqual(ids("monitor"), ["analytics", "logs"]);
+test("power pages live under a collapsible Advanced section", () => {
+  assert.deepEqual(ids("advanced"), ["combos", "api-manager", "playground", "analytics", "logs"]);
+  const advanced = sidebarVisibility.SIDEBAR_SECTIONS.find((section) => section.id === "advanced");
+  assert.equal(advanced.collapsible, true);
 });
 
 test("system sidebar has settings and docs", () => {
@@ -22,7 +24,7 @@ test("system sidebar has settings and docs", () => {
 
 test("normalizeHiddenSidebarItems drops unknown ids", () => {
   assert.deepEqual(
-    sidebarVisibility.normalizeHiddenSidebarItems(["logs", "cache", "bogus", "providers"]),
-    ["providers", "logs"]
+    sidebarVisibility.normalizeHiddenSidebarItems(["logs", "cache", "bogus", "providers", "map"]),
+    ["providers", "map", "logs"]
   );
 });

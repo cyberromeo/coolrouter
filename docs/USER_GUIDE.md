@@ -1,25 +1,43 @@
 # User guide
 
-A tour of the dashboard and the everyday jobs: connecting providers, building combos, issuing keys and plugging in your tools.
+A tour of the dashboard. The main menu is three steps: **Providers** (where your models come from), **Model map** (which model answers what) and **Connect apps** (Claude Code, Claude Desktop, Codex or anything else). The power tools (Combos, API keys, Playground, Usage and Logs) are under **Advanced** in the sidebar.
 
 ## Home
 
-Your endpoint URL with copy-paste snippets for cURL, Python and Node.js, four quick stats (providers, models, requests and tokens in the last 24 hours), and a three-step **Get started** checklist that ticks itself off as you go.
+The three steps with their status: how many providers are connected, which model answers Opus, Sonnet and Haiku, and which apps are connected. The step to do next is highlighted. Below it: your endpoint URL and the last 24 hours of requests and tokens. If Cool Router's port changed since you connected an app, a banner offers to update it.
 
 ## Providers
 
-Every supported provider appears as a card, grouped by how you connect:
+**Your providers** lists what you have connected, with **Test**, **Refresh models**, **Details** and **Remove**. Under it, **Add a provider** shows every supported provider, grouped by how you pay:
 
-- **Account sign-in (OAuth)**: Claude Code, OpenAI Codex, GitHub Copilot, Gemini CLI, Qwen Code, Kiro, Cursor and others. Click the card, then **Connect** and finish the sign-in in the browser window that opens.
-- **API key**: OpenAI, Anthropic, Gemini (AI Studio), OpenRouter, DeepSeek, Groq, xAI, Mistral and dozens more. Click the card, **Add connection**, paste the key.
-- **Compatible endpoints**: add any OpenAI- or Anthropic-compatible server (Ollama, LM Studio, vLLM, a company proxy) with its base URL.
+- **Pay per use**: paste an API key (OpenAI, Anthropic, Gemini, DeepSeek, Groq, xAI, Mistral, OpenRouter and many more). The key is checked before it is saved; **Get a key** opens the provider's key page.
+- **Subscriptions**: sign in with a plan you already have, such as Claude, ChatGPT/Codex, GitHub Copilot, Cursor or Kiro.
+- **Free**: providers with a free tier or free sign-in.
+- **On this computer**: Ollama, LM Studio and llama.cpp. Cool Router looks for them on their usual port and connects every model they serve; if one isn't running, it shows the command to start it.
+- **Custom URL**: any other OpenAI- or Anthropic-compatible service: a name, its base URL and, if needed, a key.
 
-Tips:
+After you connect a provider, its models are fetched automatically, and if your model map is still empty it is filled in for you. **Detailed view** (top right) shows the previous all-cards layout with bulk tests and imports; a provider's **Details** page has its accounts, models and advanced options.
 
-- Add several accounts or keys for the same provider. Cool Router spreads load across them and skips any that hit a rate limit.
-- **Test** checks a connection; **Test All** checks every one.
-- Turn on **Configured only** to hide providers you haven't set up.
-- Open a provider to see its models, sync the model list, or disable a model.
+## Model map
+
+Claude Code and Claude Desktop only ask for Claude models: Opus, Sonnet and Haiku. The model map decides which of **your** models answer each of those names. Each of the three routes is a list in fallback order: the first model answers, and if it fails (an outage, a rate limit, a request too large for it) the next one takes over.
+
+- **Map** view: a mind map with your apps on the left, Cool Router in the middle, and the three routes and their models on the right. Drag a model along its row to reorder it, or onto another row to move it. **Your models** opens a drawer with every connected model: drag one onto a route, or press **O**, **S** or **H** to add it to Opus, Sonnet or Haiku.
+- **List** view: the same routes as three lists with move and remove buttons, for keyboard use.
+- **Arrange for me** spreads your models over the three routes: the most capable (by price) on Opus, the cheapest on Haiku. It skips models without tool use or with less than 100k context, which Claude Code can't work with.
+- Changes save by themselves.
+
+What the routes answer:
+
+| An app asks for                                                  | Answered by      |
+| ---------------------------------------------------------------- | ---------------- |
+| `claude-opus-…`, `claude-fable-…` or `opus`                      | the Opus route   |
+| `claude-sonnet-…`, any other `claude-…` name, `sonnet` or `auto` | the Sonnet route |
+| `claude-haiku-…` or `haiku`                                      | the Haiku route  |
+
+A route with no models uses its neighbour's. Names with a provider prefix (`cc/claude-…`, `anthropic/claude-…`) are not affected and still go straight to that provider. The routes are three ordinary combos named `opus`, `sonnet` and `haiku`.
+
+These rules switch on only once you save a change on the map or connect an app, so upgrading never changes how existing `claude-…` requests are routed.
 
 ## Combos
 
@@ -80,19 +98,52 @@ Every request with time, status, model, provider, account, API key, combo, token
 | Routing  | Default routing strategy, combo defaults, model aliases, fallback chains                     |
 | Advanced | Upstream HTTP/SOCKS proxy for provider traffic                                               |
 
-## Connect your tools
+## Connect your apps
 
-Anything that accepts an OpenAI-compatible base URL works. Use `http://localhost:20128/v1` as the base URL, a Cool Router key as the API key, and a `provider/model` or combo name as the model.
+**Connect apps** has a card for each app. Every app gets its own Cool Router key, named after the app and listed under Advanced → API keys. Each card shows whether the app is installed and connected, and turns **Live** once the app's first message reaches Cool Router. **Show me how** has the steps and a manual alternative with values to copy.
 
-| Tool                       | Where to set it                                                              |
-| -------------------------- | ---------------------------------------------------------------------------- |
-| OpenAI SDK (Python / Node) | `base_url` / `baseURL` and `api_key` / `apiKey`                              |
-| Cursor                     | Settings → Models → OpenAI API Key → Override OpenAI Base URL                |
-| Cline / Roo Code           | API Provider: OpenAI Compatible → Base URL, API Key, Model ID                |
-| Continue                   | `config.yaml`: `provider: openai`, `apiBase`, `apiKey`, `model`              |
-| Codex CLI                  | `OPENAI_BASE_URL=http://localhost:20128/v1` and `OPENAI_API_KEY`             |
-| Claude Code                | `ANTHROPIC_BASE_URL=http://localhost:20128` and `ANTHROPIC_AUTH_TOKEN=<key>` |
-| Open WebUI / LibreChat     | Add an OpenAI connection with the base URL and key                           |
+### Claude Code
+
+**Connect** adds these to the `env` block of `~/.claude/settings.json` (Windows: `%USERPROFILE%\.claude\settings.json`; `CLAUDE_CONFIG_DIR` is honoured). Nothing else in the file changes, and a backup is kept in Cool Router's data folder.
+
+| Variable                                                | Value                                                             |
+| ------------------------------------------------------- | ----------------------------------------------------------------- |
+| `ANTHROPIC_BASE_URL`                                    | `http://127.0.0.1:20128` (your port)                              |
+| `ANTHROPIC_AUTH_TOKEN`                                  | the key made for Claude Code                                      |
+| `ANTHROPIC_DEFAULT_OPUS_MODEL` / `_SONNET_` / `_HAIKU_` | `claude-opus-5-5`, `claude-sonnet-5-5`, `claude-haiku-5-5`        |
+| `ANTHROPIC_DEFAULT_*_MODEL_NAME`                        | for example "Opus → GPT 5 (Cool Router)", shown in `/model`       |
+| `CLAUDE_CODE_AUTO_COMPACT_WINDOW`                       | the smallest context window of your first-choice models, if known |
+| `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS`                | `1` when a route uses a model not served by Anthropic             |
+
+It also removes `ANTHROPIC_API_KEY` and `ANTHROPIC_MODEL` from that block while connected, so they don't compete with the routes. **Disconnect** puts back exactly the values that were there before. Restart Claude Code afterwards and run `/status`: it should show _Anthropic base URL: http://127.0.0.1:20128_.
+
+### Claude Desktop
+
+Claude Desktop keeps its gateway settings in a folder it manages itself, so Cool Router gives you a setup file instead of editing them:
+
+1. **Download setup file** (`CoolRouter-ClaudeDesktop.json`).
+2. In Claude Desktop: **Help → Troubleshooting → Enable Developer Mode** (on Windows, open the ☰ menu first).
+3. **Developer → Configure Third-Party Inference…**
+4. **Import configuration…**, choose the file, then **Apply Changes** and **Relaunch now**.
+5. Pick Opus, Sonnet or Haiku as usual.
+
+Or set **Inference provider** to **Gateway** and type the base URL and key shown on the card. Delete the setup file after importing: it contains Claude Desktop's key.
+
+### Codex
+
+Choose the route Codex should use (Sonnet by default) and click **Connect**. Cool Router edits `~/.codex/config.toml` (`CODEX_HOME` is honoured): it sets `model`, `model_provider = "coolrouter"` and `model_context_window`, and adds a `[model_providers.coolrouter]` table with `base_url = "http://127.0.0.1:20128/v1"`, `wire_api = "responses"` and the key. Comments and everything else in the file stay. If the file uses a layout Cool Router can't edit safely, nothing is changed and the card shows the block to paste instead.
+
+### Any other app
+
+**Show address and key** gives the base URL (`…/v1`), a key and the model `auto` (the Sonnet route), with OpenAI SDK, Anthropic SDK and curl examples. You can also ask for `opus`, `sonnet` or `haiku`, a combo name or a `provider/model` id.
+
+| Tool                       | Where to set it                                                 |
+| -------------------------- | --------------------------------------------------------------- |
+| OpenAI SDK (Python / Node) | `base_url` / `baseURL` and `api_key` / `apiKey`                 |
+| Cursor                     | Settings → Models → OpenAI API Key → Override OpenAI Base URL   |
+| Cline / Roo Code           | API Provider: OpenAI Compatible → Base URL, API Key, Model ID   |
+| Continue                   | `config.yaml`: `provider: openai`, `apiBase`, `apiKey`, `model` |
+| Open WebUI / LibreChat     | Add an OpenAI connection with the base URL and key              |
 
 ## Backups
 

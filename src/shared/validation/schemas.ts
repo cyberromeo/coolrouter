@@ -1372,3 +1372,55 @@ export const versionManagerToolSchema = z.object({
 export const versionManagerInstallSchema = versionManagerToolSchema.extend({
   version: z.string().trim().optional(),
 });
+
+// ─── Model map (Opus / Sonnet / Haiku routes) ─────────────────────────────
+export const modelMapTierSchema = z.enum(["opus", "sonnet", "haiku"]);
+
+export const updateModelMapRouteSchema = z
+  .object({
+    tier: modelMapTierSchema,
+    models: z
+      .array(
+        z
+          .string()
+          .trim()
+          .min(3)
+          .max(300)
+          .regex(/^[^\s]+\/[^\s]+$/, "Use a provider/model id")
+      )
+      .max(12),
+  })
+  .strict();
+
+export const modelMapAutoFillSchema = z
+  .object({
+    /** Replace routes that already have models (the "Re-arrange for me" button). */
+    force: z.boolean().optional(),
+  })
+  .strict();
+
+// ─── Connect apps (Claude Code, Codex, Claude Desktop, any app) ───────────
+export const connectClaudeCodeSchema = z
+  .object({
+    /** "auto" writes ~/.claude/settings.json; "manual" only returns the values to paste. */
+    mode: z.enum(["auto", "manual"]).default("auto"),
+  })
+  .strict();
+
+export const connectCodexSchema = z
+  .object({
+    mode: z.enum(["auto", "manual"]).default("auto"),
+    route: modelMapTierSchema.default("sonnet"),
+  })
+  .strict();
+
+export const connectOtherAppSchema = z.object({}).strict();
+
+export const clientToolIdSchema = z.enum(["claude-code", "codex", "claude-desktop", "other"]);
+
+// ─── Local model servers (Ollama, LM Studio, llama.cpp) ───────────────────
+export const localProbeSchema = z
+  .object({
+    server: z.enum(["ollama", "lmstudio", "llamacpp"]),
+  })
+  .strict();

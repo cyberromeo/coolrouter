@@ -1,6 +1,6 @@
 {
   "name": "@coolrouter/open-sse",
-  "version": "0.1.2",
+  "version": "0.2.1",
   "description": "Express SSE sidecar for Cool Router — handles streaming, protocol translation, and provider orchestration",
   "type": "module",
   "main": "index.js",

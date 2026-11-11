@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* React Flow (model map canvas). In the base layer so Tailwind utilities win. */
+@import "@xyflow/react/dist/base.css" layer(base);
 
 /* Tailwind v4 auto-detection cannot scan directories with parentheses
    (e.g. Next.js route groups like "(dashboard)"). Explicit @source
@@ -53,6 +55,11 @@
   --shadow-soft: 0 1px 2px rgba(0, 0, 0, 0.04);
   --shadow-warm: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
   --shadow-elevated: 0 0 0 1px rgba(0, 0, 0, 0.08), 0 8px 24px -6px rgba(0, 0, 0, 0.12);
+
+  /* Model map routes (Opus / Sonnet / Haiku) */
+  --tier-opus: #7c5cdb;
+  --tier-sonnet: #d97757;
+  --tier-haiku: #1f9e8a;
 }
 
 .dark {
@@ -80,6 +87,10 @@
   --shadow-soft: 0 0 0 1px rgba(255, 255, 255, 0.02);
   --shadow-warm: 0 0 0 1px rgba(255, 255, 255, 0.08);
   --shadow-elevated: 0 0 0 1px rgba(255, 255, 255, 0.1), 0 8px 24px -6px rgba(0, 0, 0, 0.6);
+
+  --tier-opus: #9a7ff0;
+  --tier-sonnet: #e58a6b;
+  --tier-haiku: #2db8a2;
 }
 
 @theme inline {
@@ -457,5 +468,35 @@ pre,
 
   .ant-table {
     min-width: 600px; /* Prevent columns from crushing together */
+  }
+}
+
+/* ── Model map canvas (React Flow) ── */
+.coolrouter-map .react-flow {
+  --xy-background-color: transparent;
+  --xy-edge-stroke: var(--color-border);
+  --xy-controls-button-background-color: var(--color-surface);
+  --xy-controls-button-background-color-hover: var(--color-bg-subtle);
+  --xy-controls-button-color: var(--color-text-main);
+  --xy-controls-button-border-color: var(--color-border);
+}
+.coolrouter-map .react-flow__node {
+  font-family: var(--font-sans);
+}
+.coolrouter-map .react-flow__controls {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-soft);
+  border: 1px solid var(--color-border);
+}
+.coolrouter-map .react-flow__controls-button {
+  border-bottom: 1px solid var(--color-border);
+}
+.coolrouter-map .react-flow__controls-button svg {
+  fill: currentColor;
+}
+@media (prefers-reduced-motion: reduce) {
+  .coolrouter-map .react-flow__edge.animated path {
+    animation: none;
   }
 }

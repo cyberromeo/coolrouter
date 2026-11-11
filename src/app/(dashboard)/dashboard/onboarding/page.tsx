@@ -209,6 +209,20 @@ export default function OnboardingWizard() {
           // keep the "could not test" result
         }
       }
+      // Fetch the provider's models and lay out a first model map from them, so the
+      // dashboard opens with Opus, Sonnet and Haiku already answered.
+      if (connectionId) {
+        await fetch(`/api/providers/${connectionId}/sync-models`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }).catch(() => null);
+        await fetch("/api/model-map/auto-fill", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: "{}",
+        }).catch(() => null);
+      }
       setProviderResult(result);
       setProviderKey("");
     } catch {

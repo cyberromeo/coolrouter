@@ -89,6 +89,10 @@ function usePageInfo(pathname: string | null): {
       description: t("providerDescription"),
       breadcrumbs: [],
     };
+  if (pathname.includes("/dashboard/map"))
+    return { title: t("modelMap"), description: t("modelMapDescription"), breadcrumbs: [] };
+  if (pathname.includes("/dashboard/connect"))
+    return { title: t("connect"), description: t("connectDescription"), breadcrumbs: [] };
   if (pathname.includes("/combos"))
     return { title: t("combos"), description: t("comboDescription"), breadcrumbs: [] };
   if (pathname.includes("/analytics"))

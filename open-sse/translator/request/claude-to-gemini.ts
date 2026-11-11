@@ -6,6 +6,7 @@ import {
   cleanJSONSchemaForAntigravity,
 } from "../helpers/geminiHelper.ts";
 import { DEFAULT_THINKING_GEMINI_SIGNATURE } from "../../config/defaultThinkingSignature.ts";
+import { filterPortableClaudeTools } from "../helpers/anthropicTools.ts";
 
 /**
  * Direct Claude → Gemini request translator.
@@ -170,7 +171,8 @@ export function claudeToGeminiRequest(model, body, stream) {
   // ── Convert tools ──────────────────────────────────────────────
   if (body.tools && Array.isArray(body.tools) && body.tools.length > 0) {
     const functionDeclarations = [];
-    for (const tool of body.tools) {
+    // Anthropic-defined server tools (web_search, code_execution, ...) can't run on Gemini.
+    for (const tool of filterPortableClaudeTools(body.tools)) {
       if (tool.name) {
         functionDeclarations.push({
           name: tool.name,

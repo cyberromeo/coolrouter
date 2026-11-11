@@ -681,3 +681,40 @@ export async function getCallLogById(id: string) {
 
   return entry;
 }
+
+/**
+ * The most recent request made with one API key — used by the Connect page to show
+ * "Live ✓" once an app's first message reaches Cool Router.
+ */
+export function getLatestCallForApiKey(apiKeyId: string): {
+  timestamp: string;
+  model: string | null;
+  requestedModel: string | null;
+  provider: string | null;
+  status: number | null;
+} | null {
+  if (!apiKeyId) return null;
+  const db = getDbInstance();
+  const row = db
+    .prepare(
+      `SELECT timestamp, model, requested_model, provider, status
+       FROM call_logs WHERE api_key_id = ? ORDER BY timestamp DESC LIMIT 1`
+    )
+    .get(apiKeyId) as
+    | {
+        timestamp: string;
+        model: string | null;
+        requested_model: string | null;
+        provider: string | null;
+        status: number | null;
+      }
+    | undefined;
+  if (!row) return null;
+  return {
+    timestamp: row.timestamp,
+    model: row.model,
+    requestedModel: row.requested_model,
+    provider: row.provider,
+    status: row.status,
+  };
+}

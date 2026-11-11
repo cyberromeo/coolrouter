@@ -1598,13 +1598,27 @@ export function getUnsupportedParams(provider: string, modelId: string): readonl
   if (cached) return cached;
 
   // 3. Handle prefixed model IDs (e.g., "openai/o3" → "o3")
-  if (modelId.includes("/")) {
-    const bareId = modelId.split("/").pop() || "";
+  const bareId = modelId.includes("/") ? modelId.split("/").pop() || "" : modelId;
+  if (bareId !== modelId) {
     const bare = _unsupportedParamsMap.get(bareId);
     if (bare) return bare;
   }
 
+  // 4. OpenAI reasoning families missing from the static list (models synced from the
+  //    live /models endpoint: o4-mini, gpt-5, gpt-5.1-codex, ...). They reject sampling
+  //    parameters such as temperature; the chat variants (gpt-5-chat-latest) accept them.
+  if (provider === "openai" && isOpenAIReasoningModel(bareId)) {
+    return REASONING_UNSUPPORTED;
+  }
+
   return [];
+}
+
+/** o-series and GPT-5 reasoning models on the official OpenAI API. */
+export function isOpenAIReasoningModel(modelId: string): boolean {
+  const id = String(modelId || "").toLowerCase();
+  if (id.includes("-chat")) return false;
+  return /^o\d/.test(id) || /^gpt-5/.test(id);
 }
 
 /**

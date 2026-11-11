@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useSyncExternalStore } from "react";
 import PropTypes from "prop-types";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -14,6 +14,37 @@ import {
   SIDEBAR_SECTIONS,
   normalizeHiddenSidebarItems,
 } from "@/shared/constants/sidebarVisibility";
+
+const OPEN_SECTIONS_STORAGE_KEY = "coolrouter:sidebar-open-sections";
+const OPEN_SECTIONS_EVENT = "coolrouter:sidebar-open-sections";
+
+// Which collapsible sections are open lives in localStorage; read through
+// useSyncExternalStore so the server render and hydration agree.
+function subscribeToOpenSections(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener(OPEN_SECTIONS_EVENT, onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener(OPEN_SECTIONS_EVENT, onChange);
+  };
+}
+
+function readOpenSections(): string {
+  try {
+    return window.localStorage.getItem(OPEN_SECTIONS_STORAGE_KEY) || "{}";
+  } catch {
+    return "{}";
+  }
+}
+
+function parseOpenSections(json: string): Record<string, boolean> {
+  try {
+    const parsed = JSON.parse(json);
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
 
 export default function Sidebar({
   onClose,
@@ -32,6 +63,22 @@ export default function Sidebar({
   const [hiddenSidebarItems, setHiddenSidebarItems] = useState<string[]>([]);
   const [customAppName, setCustomAppName] = useState<string | null>(null);
   const [customLogo, setCustomLogo] = useState<string | null>(null);
+  const openSectionsJson = useSyncExternalStore(
+    subscribeToOpenSections,
+    readOpenSections,
+    () => "{}"
+  );
+  const openSections = parseOpenSections(openSectionsJson);
+
+  const toggleSection = (id: string) => {
+    const next = { ...openSections, [id]: !openSections[id] };
+    try {
+      window.localStorage.setItem(OPEN_SECTIONS_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Storage blocked: the section still toggles for this page view.
+    }
+    window.dispatchEvent(new Event(OPEN_SECTIONS_EVENT));
+  };
 
   useEffect(() => {
     const applySettings = (data) => {
@@ -235,16 +282,41 @@ export default function Sidebar({
         >
           {visibleSections.map((section) => {
             const showTitle = section.showTitleInSidebar !== false;
+            const containsActive = section.items.some(
+              (item) => !item.external && isActive(item.href, item.exact)
+            );
+            const expanded =
+              !section.collapsible || collapsed || containsActive || openSections[section.id];
 
             return (
               <div key={section.id} className={showTitle ? "pt-4 mt-2" : undefined}>
-                {!collapsed && showTitle && (
+                {!collapsed && showTitle && !section.collapsible && (
                   <p className="px-3 text-[11px] font-medium text-text-muted/70 uppercase tracking-wider mb-1.5">
                     {section.title}
                   </p>
                 )}
+                {!collapsed && showTitle && section.collapsible && (
+                  <button
+                    type="button"
+                    onClick={() => toggleSection(section.id)}
+                    aria-expanded={Boolean(expanded)}
+                    disabled={containsActive}
+                    className="mb-1.5 flex w-full items-center justify-between rounded-md px-3 py-1 text-[11px] font-medium uppercase tracking-wider text-text-muted/70 transition-colors hover:text-text-main disabled:cursor-default disabled:hover:text-text-muted/70"
+                  >
+                    {section.title}
+                    <span
+                      className={cn(
+                        "material-symbols-outlined text-[16px] transition-transform",
+                        expanded && "rotate-90"
+                      )}
+                      aria-hidden="true"
+                    >
+                      chevron_right
+                    </span>
+                  </button>
+                )}
                 {collapsed && showTitle && <div className="border-t border-border mb-2" />}
-                {section.items.map(renderNavLink)}
+                {expanded && section.items.map(renderNavLink)}
               </div>
             );
           })}

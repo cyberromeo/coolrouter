@@ -81,8 +81,10 @@ export function isClaudeCodeClient(userAgent: string | null | undefined): boolea
   if (!userAgent) return false;
   const ua = userAgent.toLowerCase();
 
-  // Claude Code user agents
+  // Claude Code user agents. The CLI identifies itself as
+  // "claude-cli/<version> (external, cli)"; desktop and IDE hosts embed the same CLI.
   if (ua.includes("claude-code") || ua.includes("claude_code")) return true;
+  if (ua.includes("claude-cli/")) return true;
   if (ua.includes("anthropic") && ua.includes("cli")) return true;
 
   return false;

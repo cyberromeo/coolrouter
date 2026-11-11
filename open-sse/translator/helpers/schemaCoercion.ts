@@ -211,3 +211,31 @@ export function injectEmptyReasoningContentForToolCalls(
     return { ...message, reasoning_content: "" };
   });
 }
+
+/**
+ * Providers whose Chat Completions API rejects unknown message fields, so a
+ * `reasoning_content` replayed from earlier thinking turns fails the whole request
+ * with a 400. Others (DeepSeek, Kimi, GLM, ...) accept or even require it.
+ */
+const PROVIDERS_REJECTING_REASONING_CONTENT = new Set(["openai", "groq", "mistral"]);
+
+export function stripReasoningContentForStrictProviders(
+  messages: unknown,
+  provider: unknown
+): unknown {
+  if (
+    !Array.isArray(messages) ||
+    !PROVIDERS_REJECTING_REASONING_CONTENT.has(String(provider || "").toLowerCase())
+  ) {
+    return messages;
+  }
+
+  return messages.map((message) => {
+    if (!isPlainObject(message) || message.role !== "assistant") return message;
+    if (message.reasoning_content === undefined && message.reasoning_text === undefined) {
+      return message;
+    }
+    const { reasoning_content: _content, reasoning_text: _text, ...rest } = message;
+    return rest;
+  });
+}

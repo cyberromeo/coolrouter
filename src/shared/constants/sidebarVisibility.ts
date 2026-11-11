@@ -1,6 +1,8 @@
 export const HIDEABLE_SIDEBAR_ITEM_IDS = [
   "home",
   "providers",
+  "map",
+  "connect",
   "combos",
   "api-manager",
   "playground",
@@ -11,7 +13,7 @@ export const HIDEABLE_SIDEBAR_ITEM_IDS = [
 ] as const;
 
 export type HideableSidebarItemId = (typeof HIDEABLE_SIDEBAR_ITEM_IDS)[number];
-export type SidebarSectionId = "primary" | "monitor" | "system";
+export type SidebarSectionId = "primary" | "advanced" | "system";
 
 export interface SidebarItemDefinition {
   id: HideableSidebarItemId;
@@ -29,17 +31,23 @@ export interface SidebarSectionDefinition {
   items: readonly SidebarItemDefinition[];
   showTitleInSidebar?: boolean;
   visibility?: "always" | "debug";
+  /** Folded away by default; the user opens it (remembered per browser) */
+  collapsible?: boolean;
 }
 
+// The simple app: add providers, arrange models, connect apps.
 const PRIMARY_SIDEBAR_ITEMS: readonly SidebarItemDefinition[] = [
   { id: "home", href: "/dashboard", i18nKey: "home", icon: "home", exact: true },
   { id: "providers", href: "/dashboard/providers", i18nKey: "providers", icon: "dns" },
+  { id: "map", href: "/dashboard/map", i18nKey: "modelMap", icon: "account_tree" },
+  { id: "connect", href: "/dashboard/connect", i18nKey: "connect", icon: "cable" },
+];
+
+// Power tools, folded away under "Advanced".
+const ADVANCED_SIDEBAR_ITEMS: readonly SidebarItemDefinition[] = [
   { id: "combos", href: "/dashboard/combos", i18nKey: "combos", icon: "layers" },
   { id: "api-manager", href: "/dashboard/api-manager", i18nKey: "apiManager", icon: "vpn_key" },
   { id: "playground", href: "/dashboard/playground", i18nKey: "playground", icon: "science" },
-];
-
-const MONITOR_SIDEBAR_ITEMS: readonly SidebarItemDefinition[] = [
   { id: "analytics", href: "/dashboard/analytics", i18nKey: "analytics", icon: "monitoring" },
   { id: "logs", href: "/dashboard/logs", i18nKey: "logs", icon: "receipt_long" },
 ];
@@ -64,10 +72,11 @@ export const SIDEBAR_SECTIONS: readonly SidebarSectionDefinition[] = [
     showTitleInSidebar: false,
   },
   {
-    id: "monitor",
-    titleKey: "monitorSection",
-    titleFallback: "Monitor",
-    items: MONITOR_SIDEBAR_ITEMS,
+    id: "advanced",
+    titleKey: "advancedSection",
+    titleFallback: "Advanced",
+    items: ADVANCED_SIDEBAR_ITEMS,
+    collapsible: true,
   },
   {
     id: "system",

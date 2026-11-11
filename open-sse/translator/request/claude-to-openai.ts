@@ -1,6 +1,7 @@
 import { register } from "../registry.ts";
 import { FORMATS } from "../formats.ts";
 import { adjustMaxTokens } from "../helpers/maxTokensHelper.ts";
+import { filterPortableClaudeTools } from "../helpers/anthropicTools.ts";
 
 type JsonRecord = Record<string, unknown>;
 const TOOL_CHOICE_ANY = ["a", "n", "y"].join("");
@@ -67,9 +68,10 @@ export function claudeToOpenAIRequest(model, body, stream) {
   // Fix missing tool responses - OpenAI requires every tool_call to have a response
   fixMissingToolResponses(result.messages);
 
-  // Tools
+  // Tools (Anthropic-defined server tools such as web_search can't run on another model)
+  const portableToolNames = new Set<string>();
   if (body.tools && Array.isArray(body.tools)) {
-    const normalizedTools = body.tools
+    const normalizedTools = filterPortableClaudeTools(body.tools)
       .map((tool) => {
         const name = typeof tool.name === "string" ? tool.name.trim() : "";
         if (!name) return null; // skip tools with empty/invalid name
@@ -94,12 +96,22 @@ export function claudeToOpenAIRequest(model, body, stream) {
 
     if (normalizedTools.length > 0) {
       result.tools = normalizedTools;
+      for (const tool of normalizedTools) portableToolNames.add(tool.function.name);
     }
   }
 
-  // Tool choice
+  // Tool choice (a choice naming a dropped server tool falls back to auto)
   if (body.tool_choice) {
-    result.tool_choice = convertToolChoice(body.tool_choice);
+    const choice = convertToolChoice(body.tool_choice);
+    const forcedName =
+      choice && typeof choice === "object" ? (choice as JsonRecord).function : undefined;
+    const forcedToolName =
+      forcedName && typeof forcedName === "object" ? (forcedName as JsonRecord).name : undefined;
+    if (typeof forcedToolName === "string" && !portableToolNames.has(forcedToolName)) {
+      if (result.tools) result.tool_choice = "auto";
+    } else if (result.tools || choice === "none") {
+      result.tool_choice = choice;
+    }
   }
 
   return result;
@@ -284,6 +296,8 @@ function convertToolChoice(choice) {
   switch (choice.type) {
     case "auto":
       return "auto";
+    case "none":
+      return "none";
     case TOOL_CHOICE_ANY:
       return "required";
     case "tool":

@@ -13,7 +13,13 @@ import { refreshWithRetry } from "../services/tokenRefresh.ts";
 import { createRequestLogger } from "../utils/requestLogger.ts";
 import { getModelTargetFormat, PROVIDER_ID_TO_ALIAS } from "../config/providerModels.ts";
 import { resolveModelAlias } from "../services/modelDeprecation.ts";
-import { getUnsupportedParams } from "../config/providerRegistry.ts";
+import {
+  getRegistryEntry,
+  getUnsupportedParams,
+  isOpenAIReasoningModel,
+} from "../config/providerRegistry.ts";
+import { normalizeClaudeRequestForTarget } from "../translator/helpers/claudeTargetNormalizer.ts";
+import { stripResponsesLeftoversForChat } from "../translator/helpers/responsesLeftovers.ts";
 import { hasPerModelQuota, lockModelIfPerModelQuota } from "../services/accountFallback.ts";
 import { COOLDOWN_MS } from "../config/constants.ts";
 import {
@@ -221,6 +227,38 @@ function getHeaderValueCaseInsensitive(
     }
   }
   return null;
+}
+
+function readClientHeader(headers: unknown, name: string): string | null {
+  if (!headers || typeof headers !== "object") return null;
+  if (typeof (headers as Headers).get === "function") {
+    const value = (headers as Headers).get(name);
+    return typeof value === "string" && value.trim() ? value.trim() : null;
+  }
+  return getHeaderValueCaseInsensitive(headers as Record<string, unknown>, name);
+}
+
+/**
+ * The client's `anthropic-beta` values merged with the provider's defaults. The
+ * official API key provider never forwards OAuth betas (they belong to a claude.ai
+ * login, not to an API key). Returns null when the client sent nothing extra.
+ */
+export function mergeAnthropicBetaHeader(provider: string, clientBeta: string | null) {
+  if (!clientBeta) return null;
+  const registryHeaders = (getRegistryEntry(provider)?.headers || {}) as Record<string, unknown>;
+  const defaults = String(getHeaderValueCaseInsensitive(registryHeaders, "Anthropic-Beta") || "");
+  const values: string[] = [];
+  const add = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed || values.includes(trimmed)) return;
+    if (provider === "anthropic" && trimmed.startsWith("oauth-")) return;
+    values.push(trimmed);
+  };
+  defaults.split(",").forEach(add);
+  const defaultCount = values.length;
+  clientBeta.split(",").forEach(add);
+  if (values.length === defaultCount) return null;
+  return values.join(",");
 }
 
 function buildClaudePromptCacheLogMeta(
@@ -743,6 +781,11 @@ export async function handleChatCore({
       ? credentials.providerSpecificData.customUserAgent.trim()
       : "";
 
+  // Set by the pure Claude passthrough: the client's anthropic-beta values merged
+  // with the provider's own, so beta-gated body fields (context_management, ...) are
+  // accepted upstream.
+  let passthroughAnthropicBeta: string | null = null;
+
   const buildUpstreamHeadersForExecute = (modelToCall: string): Record<string, string> => {
     const upstreamHeaders =
       modelToCall === effectiveModel
@@ -763,6 +806,10 @@ export async function handleChatCore({
       if ("user-agent" in upstreamHeaders) {
         upstreamHeaders["user-agent"] = connectionCustomUserAgent;
       }
+    }
+
+    if (passthroughAnthropicBeta) {
+      upstreamHeaders["Anthropic-Beta"] = passthroughAnthropicBeta;
     }
 
     return upstreamHeaders;
@@ -904,6 +951,14 @@ export async function handleChatCore({
     );
   }
 
+  // An Anthropic Messages request sent to the official Anthropic API needs no
+  // translation, whatever the client: the OpenAI round trip below drops thinking,
+  // effort, server tools and documents. (The Claude subscription provider keeps the
+  // round trip for non-Claude Code clients: it needs the Claude Code request shape.)
+  const usePureClaudePassthrough =
+    isClaudePassthrough &&
+    (preserveCacheControl || (provider === "anthropic" && cacheControlMode !== "never"));
+
   try {
     if (nativeCodexPassthrough) {
       translatedBody = { ...body, _nativeCodexPassthrough: true };
@@ -950,13 +1005,23 @@ export async function handleChatCore({
         preserveCacheControl,
       });
       log?.debug?.("FORMAT", "claude-code-compatible bridge enabled");
-    } else if (isClaudePassthrough && preserveCacheControl) {
-      // Pure passthrough: when preserveCacheControl is true, forward the body
-      // as-is without prior normalization. The OpenAI round-trip would strip
-      // cache_control markers; even prepareClaudeRequest can alter structure.
-      // Claude Code sends well-formed Messages API payloads — trust it.
-      translatedBody = { ...body };
+    } else if (usePureClaudePassthrough) {
+      // Pure passthrough: forward the body as-is without prior normalization.
+      // The OpenAI round-trip would strip cache_control markers; even
+      // prepareClaudeRequest can alter structure. Claude Code sends well-formed
+      // Messages API payloads — trust it, adjusting only what the actual target
+      // model can't accept (a route may serve a "claude-opus-5-5" request with an
+      // older Claude model).
+      translatedBody = {
+        ...normalizeClaudeRequestForTarget(body, effectiveModel || model),
+      };
       translatedBody._disableToolPrefix = true;
+      if (provider === "anthropic" || provider === "claude") {
+        passthroughAnthropicBeta = mergeAnthropicBetaHeader(
+          provider,
+          readClientHeader(clientRawRequest?.headers, "anthropic-beta")
+        );
+      }
 
       log?.debug?.("FORMAT", "claude passthrough with cache_control preservation");
     } else if (isClaudePassthrough) {
@@ -1065,6 +1130,14 @@ export async function handleChatCore({
                 // blocks in user messages. Silently dropping them causes Codex to loop
                 // because it never receives the tool response and keeps re-requesting it.
                 if (block.type === "tool_result") {
+                  // Anthropic Messages requests: tool_result is a native block that the
+                  // Claude request translators turn into a paired tool message / function
+                  // output. Flattening it to text here left the tool call unanswered, so
+                  // the translator inserted "[No response received]" and the model never
+                  // saw the tool output (breaks Claude Code on every non-Claude target).
+                  if (sourceFormat === FORMATS.CLAUDE) {
+                    return [block];
+                  }
                   const toolId = block.tool_use_id ?? block.id ?? "unknown";
                   const resultContent = block.content ?? block.text ?? block.output ?? "";
                   const resultText =
@@ -1150,6 +1223,12 @@ export async function handleChatCore({
     return createErrorResult(statusCode, message);
   }
 
+  // Codex and other Responses clients routed to a Chat Completions provider: drop the
+  // Responses-only fields the translator copies through.
+  if (sourceFormat === FORMATS.OPENAI_RESPONSES && targetFormat === FORMATS.OPENAI) {
+    stripResponsesLeftoversForChat(translatedBody, provider || "");
+  }
+
   // Extract toolNameMap for response translation (Claude OAuth)
   const translatedToolNameMap = translatedBody._toolNameMap;
   const nativeClaudeToolNameMap = isClaudePassthrough
@@ -1178,6 +1257,21 @@ export async function handleChatCore({
     if (stripped.length > 0) {
       log?.warn?.("PARAMS", `Stripped unsupported params for ${model}: ${stripped.join(", ")}`);
     }
+  }
+
+  // OpenAI's reasoning models (o-series, GPT-5) reject max_tokens outright and only
+  // accept max_completion_tokens. Translated requests (e.g. Claude Code → OpenAI)
+  // carry max_tokens, so move the limit over for those models.
+  if (
+    provider === "openai" &&
+    targetFormat === FORMATS.OPENAI &&
+    isOpenAIReasoningModel(model) &&
+    typeof translatedBody.max_tokens === "number"
+  ) {
+    if (translatedBody.max_completion_tokens === undefined) {
+      translatedBody.max_completion_tokens = translatedBody.max_tokens;
+    }
+    delete translatedBody.max_tokens;
   }
 
   // Provider-specific max_tokens caps (#711)

@@ -13,8 +13,8 @@ const variants = {
 
 const sizes = {
   sm: "h-7 px-3 text-xs rounded-md",
-  md: "h-9 px-4 text-sm rounded-md",
-  lg: "h-11 px-6 text-sm rounded-md",
+  md: "h-9 px-4 text-sm rounded-lg",
+  lg: "h-11 px-6 text-sm rounded-lg",
 };
 
 interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {

@@ -261,7 +261,8 @@ test.describe("Providers management", () => {
   }) => {
     await installProviderFetchMock(page);
 
-    await gotoOrSkip(page, "/dashboard/providers");
+    // The detailed view (?view=all) still lists every provider card.
+    await gotoOrSkip(page, "/dashboard/providers?view=all");
 
     const openAiCard = page.locator('a[href="/dashboard/providers/openai"]').first();
     await expect(openAiCard).toBeVisible();

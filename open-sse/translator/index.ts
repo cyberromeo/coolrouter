@@ -5,6 +5,7 @@ import { filterToOpenAIFormat } from "./helpers/openaiHelper.ts";
 import {
   coerceToolSchemas,
   injectEmptyReasoningContentForToolCalls,
+  stripReasoningContentForStrictProviders,
   sanitizeToolDescriptions,
 } from "./helpers/schemaCoercion.ts";
 import { getRequestTranslator, getResponseTranslator } from "./registry.ts";
@@ -193,6 +194,7 @@ export function translateRequest(
 
   if (targetFormat === FORMATS.OPENAI && result.messages && Array.isArray(result.messages)) {
     result.messages = injectEmptyReasoningContentForToolCalls(result.messages, provider);
+    result.messages = stripReasoningContentForStrictProviders(result.messages, provider);
   }
 
   // Ensure unique tool_call ids on final payload (translators may have introduced duplicates)

@@ -77,6 +77,7 @@ export async function createCombo(data: JsonRecord) {
     "tool_filter_regex",
     "context_cache_protection",
     "context_length",
+    "managedBy",
   ]) {
     if (data[key] !== undefined) optional[key] = data[key];
   }

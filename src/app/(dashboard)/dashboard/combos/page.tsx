@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import Link from "next/link";
 import {
   Card,
   Button,
@@ -1156,6 +1157,15 @@ function ComboCard({
             {/* Name + Strategy Badge + Copy */}
             <div className="flex items-center gap-2">
               <code className="text-sm font-medium font-mono truncate">{combo.name}</code>
+              {combo.managedBy === "model-map" && (
+                <Link
+                  href="/dashboard/map"
+                  className="text-[9px] uppercase font-semibold px-1.5 py-0.5 rounded-full bg-accent/15 text-accent hover:underline"
+                  title={t("modelMapComboHint")}
+                >
+                  {t("modelMapCombo")}
+                </Link>
+              )}
               <Tooltip content={strategyDescription}>
                 <span
                   className={`text-[9px] uppercase font-semibold px-1.5 py-0.5 rounded-full ${getStrategyBadgeClass(

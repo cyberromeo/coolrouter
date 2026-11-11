@@ -23,9 +23,35 @@ function stopTextBlock(state, results) {
   state.textBlockStarted = false;
 }
 
+// Stream ended (flush) without a finish_reason chunk: some OpenAI-compatible upstreams
+// just stop or send [DONE]. Close the open blocks and end the message, otherwise
+// Anthropic clients such as Claude Code wait for a message_stop that never arrives.
+function finishUnterminatedMessage(state) {
+  if (!state?.messageStartSent || state.finishReason || state.messageStopSent) return null;
+
+  const results = [];
+  stopThinkingBlock(state, results);
+  stopTextBlock(state, results);
+  const toolCalls = state.toolCalls instanceof Map ? state.toolCalls : new Map();
+  for (const [, toolInfo] of toolCalls) {
+    results.push({ type: "content_block_stop", index: toolInfo.blockIndex });
+  }
+
+  state.finishReason = toolCalls.size > 0 ? "tool_calls" : "stop";
+  state.messageStopSent = true;
+  results.push({
+    type: "message_delta",
+    delta: { stop_reason: convertFinishReason(state.finishReason) },
+    usage: state.usage || { input_tokens: 0, output_tokens: 0 },
+  });
+  results.push({ type: "message_stop" });
+  return results;
+}
+
 // Convert OpenAI stream chunk to Claude format
 export function openaiToClaudeResponse(chunk, state) {
-  if (!chunk || !chunk.choices?.[0]) return null;
+  if (chunk === null || chunk === undefined) return finishUnterminatedMessage(state);
+  if (!chunk.choices?.[0]) return null;
 
   const results = [];
   const choice = chunk.choices[0];
@@ -217,6 +243,7 @@ export function openaiToClaudeResponse(chunk, state) {
       usage: finalUsage,
     });
     results.push({ type: "message_stop" });
+    state.messageStopSent = true;
   }
 
   return results.length > 0 ? results : null;
